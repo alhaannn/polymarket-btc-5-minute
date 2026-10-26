@@ -1,0 +1,19 @@
+[Unit]
+Description=Polybot 24/7 Polymarket Market Data Recorder
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/polymarket-btc-5-minute
+EnvironmentFile=/home/ubuntu/polymarket-btc-5-minute/.env
+ExecStart=/home/ubuntu/polymarket-btc-5-minute/.venv/bin/python main.py recorder --data-dir data/raw
+Restart=always
+RestartSec=5s
+KillMode=process
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

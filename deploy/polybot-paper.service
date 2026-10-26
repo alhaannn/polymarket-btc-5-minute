@@ -1,0 +1,19 @@
+[Unit]
+Description=Polybot Paper Trading Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/polymarket-btc-5-minute
+EnvironmentFile=/home/ubuntu/polymarket-btc-5-minute/.env
+ExecStart=/home/ubuntu/polymarket-btc-5-minute/.venv/bin/python main.py paper --strategy edge --stake 5.0
+Restart=on-failure
+RestartSec=10s
+KillMode=process
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
