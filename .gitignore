@@ -1,0 +1,11 @@
+data/
+STOP
+.pytest_cache/
+__pycache__/
+*.py[cod]
+*$py.class
+.venv
+.env
+MASTER_PROMPT.md
+
+
