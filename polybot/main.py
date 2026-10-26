@@ -239,7 +239,26 @@ def main() -> None:
             sys.exit(1)
         log.info("Live mode authorized. (Live engine module will execute in Phase 5)")
     elif args.command == "backtest":
-        log.info("Backtest requested with data '%s'. (Engine will execute in Phase 4)", args.data)
+        from polybot.backtest.engine import BacktestEngine
+        from polybot.backtest.loader import WindowDataLoader
+        from polybot.backtest.report import BacktestReporter
+        from polybot.strategy import EdgeStrategy, LegacyStrategy
+
+        loader = WindowDataLoader(args.data)
+        window_paths = loader.discover_windows()
+        if not window_paths:
+            log.warning("No window data found in %s. Run 'python main.py recorder' first.", args.data)
+            return
+
+        log.info("Loading %d window archives from %s...", len(window_paths), args.data)
+        windows = [loader.load_window(p) for p in window_paths]
+        valid_windows = [w for w in windows if w and w.winner]
+
+        config.strategy.strategy_name = args.strategy
+        strat = LegacyStrategy(config.strategy) if args.strategy == "legacy" else EdgeStrategy(config.strategy)
+        engine = BacktestEngine(config)
+        trades = engine.run(valid_windows, strategy=strat)
+        print(BacktestReporter.generate_full_report(trades, strategy_name=args.strategy))
 
 
 if __name__ == "__main__":
