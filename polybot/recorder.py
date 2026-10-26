@@ -224,6 +224,7 @@ class MarketRecorder:
             self.current_writer.close()
 
     async def _run_orchestrator(self) -> None:
+        last_heartbeat = time.time()
         while self._running:
             try:
                 now = int(time.time())
@@ -233,6 +234,24 @@ class MarketRecorder:
                     await self._switch_window(window_start)
 
                 await self._check_pending_resolutions()
+
+                # Periodic heartbeat every 30 seconds
+                if time.time() - last_heartbeat >= 30.0:
+                    last_heartbeat = time.time()
+                    elapsed = now - (self.current_window_start or now)
+                    cl_p = self.health.chainlink.last_price or 0.0
+                    bn_p = self.health.binance.last_price or 0.0
+                    log.info(
+                        "HEARTBEAT | Window %s (t+%ds) | Chainlink: $%.2f (%d ticks) | Binance: $%.2f (%d ticks) | K: %s",
+                        self.current_window_start,
+                        elapsed,
+                        cl_p,
+                        self.health.chainlink.tick_count,
+                        bn_p,
+                        self.health.binance.tick_count,
+                        f"${self.strike_price_K:.2f}" if self.strike_price_K else "Pending",
+                    )
+
                 await asyncio.sleep(1.0)
             except asyncio.CancelledError:
                 break
