@@ -7,7 +7,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from polybot.backtest.loader import WindowData
 from polybot.config import PolybotConfig, StrategyConfig
