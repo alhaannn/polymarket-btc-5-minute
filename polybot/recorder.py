@@ -25,8 +25,12 @@ from polybot.gamma import PolymarketClient
 log = logging.getLogger("polybot.recorder")
 
 
+import queue
+import threading
+
+
 class WindowWriter:
-    """Manages raw JSONL file append streams for a single 5-minute window."""
+    """High-performance non-blocking batch writer for a 5-minute window."""
 
     def __init__(self, window_dir: Path):
         self.window_dir = window_dir
@@ -38,21 +42,71 @@ class WindowWriter:
         self.metadata_path = self.window_dir / "metadata.json"
         self.resolution_path = self.window_dir / "resolution.json"
 
-        self._cl_file = open(self.chainlink_path, "a", encoding="utf-8")
-        self._bn_file = open(self.binance_path, "a", encoding="utf-8")
-        self._mkt_file = open(self.market_path, "a", encoding="utf-8")
+        self._queue: queue.Queue = queue.Queue(maxsize=200000)
+        self._stop_event = threading.Event()
+        self._worker_thread = threading.Thread(target=self._worker_loop, daemon=True, name="WindowWriterWorker")
+        self._worker_thread.start()
 
-    def write_chainlink(self, tick: Dict[str, Any]) -> None:
-        self._cl_file.write(json.dumps(tick) + "\n")
-        self._cl_file.flush()
+    def _worker_loop(self) -> None:
+        with open(self.chainlink_path, "a", encoding="utf-8") as f_cl, \
+             open(self.binance_path, "a", encoding="utf-8") as f_bn, \
+             open(self.market_path, "a", encoding="utf-8") as f_mkt:
 
-    def write_binance(self, tick: Dict[str, Any]) -> None:
-        self._bn_file.write(json.dumps(tick) + "\n")
-        self._bn_file.flush()
+            files = {
+                "chainlink": f_cl,
+                "binance": f_bn,
+                "market": f_mkt,
+            }
 
-    def write_market(self, event: Dict[str, Any]) -> None:
-        self._mkt_file.write(json.dumps(event) + "\n")
-        self._mkt_file.flush()
+            last_flush = time.time()
+            batch_count = 0
+
+            while not self._stop_event.is_set() or not self._queue.empty():
+                try:
+                    item = self._queue.get(timeout=0.25)
+                except queue.Empty:
+                    item = None
+
+                if item is not None:
+                    feed_type, line = item
+                    target_file = files.get(feed_type)
+                    if target_file:
+                        target_file.write(line if line.endswith("\n") else line + "\n")
+                        batch_count += 1
+                    self._queue.task_done()
+
+                now = time.time()
+                # Batch flush every 0.5 seconds or every 250 items
+                if batch_count >= 250 or (now - last_flush >= 0.5 and batch_count > 0):
+                    for f in files.values():
+                        f.flush()
+                    batch_count = 0
+                    last_flush = now
+
+            # Ensure final flush on shutdown
+            for f in files.values():
+                f.flush()
+
+    def write_chainlink(self, tick: Any) -> None:
+        line = tick if isinstance(tick, str) else json.dumps(tick)
+        try:
+            self._queue.put_nowait(("chainlink", line))
+        except queue.Full:
+            log.warning("Writer queue full for chainlink tick")
+
+    def write_binance(self, tick: Any) -> None:
+        line = tick if isinstance(tick, str) else json.dumps(tick)
+        try:
+            self._queue.put_nowait(("binance", line))
+        except queue.Full:
+            log.warning("Writer queue full for binance tick")
+
+    def write_market(self, event: Any) -> None:
+        line = event if isinstance(event, str) else json.dumps(event)
+        try:
+            self._queue.put_nowait(("market", line))
+        except queue.Full:
+            log.warning("Writer queue full for market event")
 
     def write_metadata(self, metadata: Dict[str, Any]) -> None:
         with open(self.metadata_path, "w", encoding="utf-8") as f:
@@ -63,12 +117,10 @@ class WindowWriter:
             json.dump(resolution, f, indent=2)
 
     def close(self) -> None:
-        for f in (self._cl_file, self._bn_file, self._mkt_file):
-            try:
-                f.flush()
-                f.close()
-            except Exception:
-                pass
+        self._stop_event.set()
+        if self._worker_thread.is_alive():
+            self._worker_thread.join(timeout=3.0)
+
 
 
 class MarketRecorder:

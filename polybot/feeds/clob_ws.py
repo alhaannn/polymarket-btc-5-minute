@@ -189,7 +189,12 @@ class CLOBOrderBookFeed:
 
             try:
                 log.info("Connecting to CLOB WebSocket at %s...", self.ws_url)
-                async with websockets.connect(self.ws_url) as ws:
+                async with websockets.connect(
+                    self.ws_url,
+                    max_queue=8192,
+                    ping_interval=20,
+                    ping_timeout=20,
+                ) as ws:
                     self._ws = ws
                     self._ws_connected = True
                     log.info("Connected to CLOB WebSocket")
