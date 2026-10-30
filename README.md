@@ -124,11 +124,11 @@ $$\text{Break-Even Win Rate} = \frac{\text{Average Fill Price} + \text{Fees}}{1.
 
 | Entry Ask | Net Cost (with 0.1% fee) | Required Win Rate |
 | :---: | :---: | :---: |
-| 0.850 | $0.851 | **85.1%** |
+| 0.850 | $0.851 |  **85.1%** |
 | 0.900 | $0.901 | **90.1%** |
 | 0.930 | $0.931 | **93.1%** |
 | 0.960 | $0.961 | **96.1%** |
-| 0.985 | $0.986 | **98.6%** |
+| 0.985 | $0.986 | **98.6%**|
 
 ### Probabilistic Model
 - **Brownian Approximation**:

@@ -385,12 +385,24 @@ class ReversalStrategy(BaseStrategy):
         if elapsed >= self.config.reversal_window_end_sec:
             return None
 
-        # 2. Extract best asks (outcome probabilities) for Up and Down
+        # 2. Extract books for Up and Down (supporting 'Up'/'Down' keys or side property)
         book_up = books.get("Up")
         book_down = books.get("Down")
+        if book_up is None or book_down is None:
+            for k, b in books.items():
+                if k.lower() == "up" or getattr(b, "side", "").lower() == "up":
+                    book_up = b
+                elif k.lower() == "down" or getattr(b, "side", "").lower() == "down":
+                    book_down = b
 
+        # Extract best asks with prediction market complement derivation: ask(Up) = 1.0 - bid(Down)
         up_prob = book_up.best_ask() if book_up else None
         down_prob = book_down.best_ask() if book_down else None
+
+        if up_prob is None and book_down and book_down.best_bid() is not None:
+            up_prob = round(1.0 - book_down.best_bid(), 4)
+        if down_prob is None and book_up and book_up.best_bid() is not None:
+            down_prob = round(1.0 - book_up.best_bid(), 4)
 
         # If data is completely missing, do not trigger
         if up_prob is None and down_prob is None:
@@ -398,16 +410,17 @@ class ReversalStrategy(BaseStrategy):
 
         # 3. Check INITIAL Entry (if not yet placed)
         if not self.initial_order_placed:
-            for side, prob, counterpart_prob, book in (
-                ("Up", up_prob, down_prob, book_up),
-                ("Down", down_prob, up_prob, book_down),
+            for side, prob, counterpart_prob, book, opp_b in (
+                ("Up", up_prob, down_prob, book_up, book_down),
+                ("Down", down_prob, up_prob, book_down, book_up),
             ):
                 if prob is None or book is None:
                     continue
 
                 # Range check: 89% <= prob <= 92% (inclusive)
                 if self.config.initial_prob_min <= prob <= self.config.initial_prob_max:
-                    fill = book.simulate_buy(self.config.initial_stake_usd)
+                    opp_bids = opp_b.get_sorted_bids() if opp_b else None
+                    fill = book.simulate_buy(self.config.initial_stake_usd, opposing_bids=opp_bids)
                     if fill is None:
                         log.info(
                             "ReversalStrategy %s ask %.3f in initial range [%.2f, %.2f] but depth thin for $%.2f",
@@ -450,16 +463,17 @@ class ReversalStrategy(BaseStrategy):
         # 4. Check REVERSAL Entry (after initial order has been placed, and reversal not yet placed)
         elif self.initial_order_placed and not self.reversal_order_placed and self.initial_side is not None:
             opp_side = "Down" if self.initial_side == "Up" else "Up"
-            opp_book = books.get(opp_side)
-            opp_prob = opp_book.best_ask() if opp_book else None
-            initial_book = books.get(self.initial_side)
-            init_current_prob = initial_book.best_ask() if initial_book else 0.0
+            opp_book = book_down if self.initial_side == "Up" else book_up
+            opp_prob = down_prob if self.initial_side == "Up" else up_prob
+            initial_book = book_up if self.initial_side == "Up" else book_down
+            init_current_prob = up_prob if self.initial_side == "Up" else down_prob
 
             if opp_prob is not None and opp_book is not None:
                 # Range check: 85% <= opp_prob <= 90% (inclusive)
                 if self.config.reversal_prob_min <= opp_prob <= self.config.reversal_prob_max:
                     reversal_stake = self.config.reversal_stake_usd
-                    fill = opp_book.simulate_buy(reversal_stake)
+                    init_bids = initial_book.get_sorted_bids() if initial_book else None
+                    fill = opp_book.simulate_buy(reversal_stake, opposing_bids=init_bids)
                     if fill is None:
                         log.info(
                             "ReversalStrategy %s ask %.3f in reversal range [%.2f, %.2f] but depth thin for $%.2f",

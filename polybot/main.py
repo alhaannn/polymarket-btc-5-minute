@@ -142,6 +142,8 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
         await clob.start()
 
     current_window_start: Optional[int] = None
+    current_tokens: Optional[Dict[str, str]] = None
+    last_discovery_attempt_ts = 0.0
     open_trades_to_settle: List[Dict[str, Any]] = []
     is_paused = False
     last_rest_poll_ts = 0.0
@@ -179,15 +181,25 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
             # Window rollover
             if current_window_start != window_start:
                 current_window_start = window_start
-                if demo:
-                    clob.track_tokens({"Up": "demo-up", "Down": "demo-down"})
+                current_tokens = None
+                K_val = health.chainlink.last_price
+                strat.reset_window(window_start, K_val)
+
+            # Market discovery (demo or live)
+            if demo:
+                if not current_tokens:
+                    current_tokens = {"Up": "demo-up", "Down": "demo-down"}
+                    clob.track_tokens(current_tokens)
                     K_val = 68500.0
                     strat.reset_window(window_start, K_val)
                     health.record_tick("chainlink", K_val, int(now * 1000))
                     health.record_tick("binance", K_val, int(now * 1000))
                     dash_state.add_log("INFO", f"Demo rollover into window {window_start} (strike K=${K_val:,.2f})")
                     log.info("Demo rollover window %d: strike K=$%.2f", window_start, K_val)
-                else:
+            else:
+                # Live network feeds: If tokens not yet discovered, attempt lookup (throttled every 2s)
+                if not current_tokens and (now - last_discovery_attempt_ts > 2.0):
+                    last_discovery_attempt_ts = now
                     try:
                         m_info = await asyncio.wait_for(
                             asyncio.to_thread(client.get_market, window_start),
@@ -195,18 +207,22 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
                         )
                     except Exception as exc:
                         m_info = None
-                        log.warning("Polymarket market lookup timed out/failed for %s: %s", current_slug, exc)
-                        dash_state.add_log("WARN", f"Polymarket API unreachable for market {current_slug}")
+                        log.debug("Market discovery timed out for %s: %s", current_slug, exc)
 
                     if m_info and m_info.get("tokens"):
-                        clob.track_tokens(m_info["tokens"])
+                        current_tokens = m_info["tokens"]
+                        clob.track_tokens(current_tokens)
                         K_val = health.chainlink.last_price
                         strat.reset_window(window_start, K_val)
-                        dash_state.add_log("INFO", f"Rollover into market {current_slug}")
-                        log.info("New window %d: strike K=%s, tokens=%s", window_start, f"${K_val:.2f}" if K_val else "pending", m_info["tokens"])
+                        dash_state.add_log("INFO", f"Discovered market {current_slug} tokens")
+                        log.info("Market %d discovered: strike K=%s, tokens=%s", window_start, f"${K_val:.2f}" if K_val else "pending", current_tokens)
+                        # Immediately take initial REST snapshot so books are primed instantly!
+                        try:
+                            await asyncio.wait_for(asyncio.to_thread(clob.poll_rest_fallback), timeout=2.0)
+                        except Exception:
+                            pass
                     else:
-                        K_val = health.chainlink.last_price
-                        strat.reset_window(window_start, K_val)
+                        dash_state.add_log("WARN", f"Market lookup pending for {current_slug} (retrying in 2s)")
 
             # In Demo mode, simulate price & probability curves
             if demo:
@@ -245,8 +261,8 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
                     [{"price": round(down_p, 3), "size": 500}]
                 )
 
-            # Process pending latency fills
-            new_fills = engine.process_pending_orders(now, clob.books)
+            # Process pending latency fills (passing side_books mapping)
+            new_fills = engine.process_pending_orders(now, clob.side_books)
             for f in new_fills:
                 dash_state.add_log(
                     "BUY",
@@ -264,13 +280,11 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
                 is_trading_allowed=time_state.is_trading_allowed,
             )
 
-            # Extract book state
-            book_up = clob.get_book("Up")
-            book_down = clob.get_book("Down")
-            up_ask = book_up.best_ask() if book_up else None
-            down_ask = book_down.best_ask() if book_down else None
-            up_bid = book_up.best_bid() if book_up else None
-            down_bid = book_down.best_bid() if book_down else None
+            # Extract book state using effective best ask/bid (including prediction market complement)
+            up_ask = clob.get_effective_ask("Up")
+            down_ask = clob.get_effective_ask("Down")
+            up_bid = clob.get_effective_bid("Up")
+            down_bid = clob.get_effective_bid("Down")
 
             # Check if CLOB WS has books; if not, poll rest fallback non-blockingly (live mode only)
             if not demo and (up_ask is None or down_ask is None) and clob._subscribed_tokens:
@@ -278,10 +292,10 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
                     last_rest_poll_ts = now
                     try:
                         await asyncio.wait_for(asyncio.to_thread(clob.poll_rest_fallback), timeout=1.5)
-                        book_up = clob.get_book("Up")
-                        book_down = clob.get_book("Down")
-                        up_ask = book_up.best_ask() if book_up else None
-                        down_ask = book_down.best_ask() if book_down else None
+                        up_ask = clob.get_effective_ask("Up")
+                        down_ask = clob.get_effective_ask("Down")
+                        up_bid = clob.get_effective_bid("Up")
+                        down_bid = clob.get_effective_bid("Down")
                     except Exception:
                         pass
 
@@ -313,10 +327,10 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
                     initial_side=strat.initial_side,
                 )
 
-            # Check for trade signal if not paused
+            # Check for trade signal if not paused (passing side_books)
             if not is_paused:
                 cur_price = health.chainlink.last_price or 0.0
-                sig = strat.on_tick(cur_price, now, clob.books, health)
+                sig = strat.on_tick(cur_price, now, clob.side_books, health)
                 if sig:
                     stake_usd = sig.cost_usd
                     allowed, reason = risk.check_trade_allowed(stake_usd, current_window_idx)

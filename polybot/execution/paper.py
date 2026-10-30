@@ -78,10 +78,24 @@ class PaperExecutionEngine(ExecutionEngine):
 
             book = books.get(order.side)
             if not book:
+                for k, b in books.items():
+                    if k.lower() == order.side.lower() or getattr(b, "side", "").lower() == order.side.lower():
+                        book = b
+                        break
+
+            if not book:
                 continue
 
+            opp_side = "Down" if order.side.lower() == "up" else "Up"
+            opp_book = books.get(opp_side)
+            if not opp_book:
+                for k, b in books.items():
+                    if k.lower() == opp_side.lower() or getattr(b, "side", "").lower() == opp_side.lower():
+                        opp_book = b
+                        break
+
             if order.order_type == "taker":
-                fill = self._execute_taker(order, current_ts, book)
+                fill = self._execute_taker(order, current_ts, book, opp_book=opp_book)
                 if fill:
                     new_fills.append(fill)
                 self.pending_orders.remove(order)
@@ -100,10 +114,12 @@ class PaperExecutionEngine(ExecutionEngine):
         order: Order,
         current_ts: float,
         book: TokenOrderBook,
+        opp_book: Optional[TokenOrderBook] = None,
     ) -> Optional[Fill]:
         """Execute market/taker order walking the book."""
         if order.action == "BUY":
-            sim = book.simulate_buy(order.usd_amount)
+            opp_bids = opp_book.get_sorted_bids() if opp_book else None
+            sim = book.simulate_buy(order.usd_amount, opposing_bids=opp_bids)
             if sim is None:
                 order.status = "REJECTED"
                 log.warning("Taker BUY rejected for %s %s: insufficient depth", order.slug, order.side)

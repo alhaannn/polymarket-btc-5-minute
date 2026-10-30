@@ -71,12 +71,22 @@ class TokenOrderBook:
             return ba - bb
         return None
 
-    def simulate_buy(self, usd: float) -> Optional[Tuple[float, float, float]]:
+    def simulate_buy(
+        self,
+        usd: float,
+        opposing_bids: Optional[List[Tuple[float, float]]] = None,
+    ) -> Optional[Tuple[float, float, float]]:
         """
         Simulate walking the ask book spending `usd`.
+        If direct asks are insufficient, walk complementary synthetic asks derived from opposing bids.
         Returns (avg_fill_price, total_shares, total_spent_usd) or None if depth insufficient.
         """
-        asks = self.get_sorted_asks()
+        asks = list(self.get_sorted_asks())
+        if not asks and opposing_bids:
+            # Derive synthetic asks from opposing bids: ask = 1.0 - bid
+            asks = [(round(1.0 - p, 4), s) for p, s in opposing_bids if round(1.0 - p, 4) > 0]
+            asks.sort(key=lambda x: x[0])  # lowest ask first
+
         if not asks or usd <= 0:
             return None
 
@@ -85,6 +95,8 @@ class TokenOrderBook:
         spent = 0.0
 
         for price, size in asks:
+            if price <= 0:
+                continue
             level_usd = price * size
             take_usd = min(remaining, level_usd)
             shares += take_usd / price
@@ -149,6 +161,45 @@ class CLOBOrderBookFeed:
         self._ws: Any = None
         self._ws_connected = False
 
+    @property
+    def side_books(self) -> Dict[str, TokenOrderBook]:
+        """Returns {'Up': book_up, 'Down': book_down} for currently tracked tokens."""
+        result = {}
+        for tid, side in self.token_to_side.items():
+            if tid in self.books:
+                result[side] = self.books[tid]
+        return result
+
+    def get_effective_ask(self, side: str) -> Optional[float]:
+        """
+        Returns best ask for side ('Up' or 'Down').
+        If direct ask book is empty, derives implied ask from opposite outcome's best bid:
+        ask(Up) = 1.0 - bid(Down).
+        """
+        book = self.get_book(side)
+        if book and book.best_ask() is not None:
+            return book.best_ask()
+        opp_side = "Down" if side.lower() == "up" else "Up"
+        opp_book = self.get_book(opp_side)
+        if opp_book and opp_book.best_bid() is not None:
+            return round(1.0 - opp_book.best_bid(), 4)
+        return None
+
+    def get_effective_bid(self, side: str) -> Optional[float]:
+        """
+        Returns best bid for side ('Up' or 'Down').
+        If direct bid book is empty, derives implied bid from opposite outcome's best ask:
+        bid(Up) = 1.0 - ask(Down).
+        """
+        book = self.get_book(side)
+        if book and book.best_bid() is not None:
+            return book.best_bid()
+        opp_side = "Down" if side.lower() == "up" else "Up"
+        opp_book = self.get_book(opp_side)
+        if opp_book and opp_book.best_ask() is not None:
+            return round(1.0 - opp_book.best_ask(), 4)
+        return None
+
     def track_tokens(self, tokens_map: Dict[str, str]) -> None:
         """Set tokens to track: {'Up': token_up, 'Down': token_down}"""
         self.token_to_side.clear()
@@ -157,6 +208,17 @@ class CLOBOrderBookFeed:
             self.token_to_side[tid] = side
             if tid not in self.books:
                 self.books[tid] = TokenOrderBook(tid)
+
+        # If already connected, dynamically send new market subscription immediately
+        if self._ws_connected and self._ws:
+            try:
+                sub_msg = {
+                    "assets_ids": self._subscribed_tokens,
+                    "type": "market",
+                }
+                asyncio.create_task(self._ws.send(json.dumps(sub_msg)))
+            except Exception as e:
+                log.debug("Failed to send dynamic CLOB sub_msg: %s", e)
 
     def get_book(self, side_or_token: str) -> Optional[TokenOrderBook]:
         if side_or_token in self.books:
