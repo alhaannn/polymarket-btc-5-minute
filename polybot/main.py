@@ -61,7 +61,8 @@ async def run_recorder(config: PolybotConfig) -> None:
         await recorder.stop()
         log.info("Recorder shut down complete.")
 
-async def run_paper(config: PolybotConfig) -> None:
+async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
+    import math
     from polybot.dashboard.server import DashboardServer
     from polybot.dashboard.state import DashboardState
     from polybot.execution.base import Order
@@ -78,11 +79,12 @@ async def run_paper(config: PolybotConfig) -> None:
     from polybot.strategy import EdgeStrategy, LegacyStrategy, ReversalStrategy
 
     log.info(
-        "PAPER MODE ACTIVE | strategy=%s initial_stake=$%.2f reversal_stake=$%.2f latency=%dms",
+        "PAPER MODE ACTIVE | strategy=%s initial_stake=$%.2f reversal_stake=$%.2f latency=%dms demo=%s",
         config.strategy.strategy_name,
         config.strategy.initial_stake_usd,
         config.strategy.reversal_stake_usd,
         config.strategy.latency_ms,
+        demo,
     )
 
     ledger = TradeLedger(config.recorder.data_dir / "paper_ledger.db")
@@ -117,24 +119,32 @@ async def run_paper(config: PolybotConfig) -> None:
     else:
         strat = EdgeStrategy(config.strategy)
 
-    rtds = RTDSFeed(
-        ws_url=config.feeds.rtds_ws_url,
-        ping_interval_sec=config.feeds.rtds_ping_interval_sec,
-        on_tick=lambda t: health.record_tick("chainlink", t["price"], t["timestamp_ms"]),
-    )
-    binance = BinanceFeed(
-        ws_url=config.feeds.binance_ws_url,
-        on_tick=lambda t: health.record_tick("binance", t["price"], t["timestamp_ms"]),
-    )
+    rtds = None
+    binance = None
     clob = CLOBOrderBookFeed(ws_url=config.feeds.clob_ws_url, rest_client=client)
 
-    await rtds.start()
-    await binance.start()
-    await clob.start()
+    if demo:
+        log.info("DEMO MODE ENABLED: Simulating 5-minute market cycles and probability swings for live UI workstation testing.")
+        dash_state.add_log("INFO", "Demo simulation active: realistic 5m cycle, initial + reversal triggers")
+        clob.track_tokens({"Up": "demo-up", "Down": "demo-down"})
+    else:
+        rtds = RTDSFeed(
+            ws_url=config.feeds.rtds_ws_url,
+            ping_interval_sec=config.feeds.rtds_ping_interval_sec,
+            on_tick=lambda t: health.record_tick("chainlink", t["price"], t["timestamp_ms"]),
+        )
+        binance = BinanceFeed(
+            ws_url=config.feeds.binance_ws_url,
+            on_tick=lambda t: health.record_tick("binance", t["price"], t["timestamp_ms"]),
+        )
+        await rtds.start()
+        await binance.start()
+        await clob.start()
 
     current_window_start: Optional[int] = None
     open_trades_to_settle: List[Dict[str, Any]] = []
     is_paused = False
+    last_rest_poll_ts = 0.0
 
     dash_state.add_log("INFO", f"Bot initialized with {config.strategy.strategy_name} strategy")
 
@@ -169,13 +179,71 @@ async def run_paper(config: PolybotConfig) -> None:
             # Window rollover
             if current_window_start != window_start:
                 current_window_start = window_start
-                m_info = client.get_market(window_start)
-                if m_info and m_info.get("tokens"):
-                    clob.track_tokens(m_info["tokens"])
-                    K_val = health.chainlink.last_price
+                if demo:
+                    clob.track_tokens({"Up": "demo-up", "Down": "demo-down"})
+                    K_val = 68500.0
                     strat.reset_window(window_start, K_val)
-                    dash_state.add_log("INFO", f"Rollover into market {current_slug}")
-                    log.info("New window %d: strike K=%s, tokens=%s", window_start, f"${K_val:.2f}" if K_val else "pending", m_info["tokens"])
+                    health.record_tick("chainlink", K_val, int(now * 1000))
+                    health.record_tick("binance", K_val, int(now * 1000))
+                    dash_state.add_log("INFO", f"Demo rollover into window {window_start} (strike K=${K_val:,.2f})")
+                    log.info("Demo rollover window %d: strike K=$%.2f", window_start, K_val)
+                else:
+                    try:
+                        m_info = await asyncio.wait_for(
+                            asyncio.to_thread(client.get_market, window_start),
+                            timeout=2.0
+                        )
+                    except Exception as exc:
+                        m_info = None
+                        log.warning("Polymarket market lookup timed out/failed for %s: %s", current_slug, exc)
+                        dash_state.add_log("WARN", f"Polymarket API unreachable for market {current_slug}")
+
+                    if m_info and m_info.get("tokens"):
+                        clob.track_tokens(m_info["tokens"])
+                        K_val = health.chainlink.last_price
+                        strat.reset_window(window_start, K_val)
+                        dash_state.add_log("INFO", f"Rollover into market {current_slug}")
+                        log.info("New window %d: strike K=%s, tokens=%s", window_start, f"${K_val:.2f}" if K_val else "pending", m_info["tokens"])
+                    else:
+                        K_val = health.chainlink.last_price
+                        strat.reset_window(window_start, K_val)
+
+            # In Demo mode, simulate price & probability curves
+            if demo:
+                elapsed = time_state.elapsed_sec
+                base_k = 68500.0
+                if elapsed < 180:
+                    # 0-179s: WAITING phase, balanced market ~0.50
+                    up_p = 0.51 + 0.03 * math.sin(elapsed / 15.0)
+                    down_p = 1.0 - up_p
+                    cur_btc = base_k + 12.0 * math.sin(elapsed / 10.0)
+                elif 180 <= elapsed < 215:
+                    # 180-214s: TRADING phase - Up surges into 89-92% trigger zone
+                    up_p = 0.905
+                    down_p = 0.095
+                    cur_btc = base_k + 75.0
+                elif 215 <= elapsed < 275:
+                    # 215-274s: Sharp reversal! Down surges into 85-90% trigger zone
+                    up_p = 0.125
+                    down_p = 0.875
+                    cur_btc = base_k - 55.0
+                else:
+                    # 275-299s: Down strengthens to 95%
+                    up_p = 0.050
+                    down_p = 0.950
+                    cur_btc = base_k - 85.0
+
+                health.record_tick("chainlink", cur_btc, int(now * 1000))
+                health.record_tick("binance", cur_btc, int(now * 1000))
+
+                clob.books["demo-up"].apply_snapshot(
+                    [{"price": round(up_p - 0.01, 3), "size": 500}],
+                    [{"price": round(up_p, 3), "size": 500}]
+                )
+                clob.books["demo-down"].apply_snapshot(
+                    [{"price": round(down_p - 0.01, 3), "size": 500}],
+                    [{"price": round(down_p, 3), "size": 500}]
+                )
 
             # Process pending latency fills
             new_fills = engine.process_pending_orders(now, clob.books)
@@ -204,13 +272,18 @@ async def run_paper(config: PolybotConfig) -> None:
             up_bid = book_up.best_bid() if book_up else None
             down_bid = book_down.best_bid() if book_down else None
 
-            # Check if CLOB WS has books; if not, poll rest fallback
-            if (up_ask is None or down_ask is None) and clob._subscribed_tokens:
-                clob.poll_rest_fallback()
-                book_up = clob.get_book("Up")
-                book_down = clob.get_book("Down")
-                up_ask = book_up.best_ask() if book_up else None
-                down_ask = book_down.best_ask() if book_down else None
+            # Check if CLOB WS has books; if not, poll rest fallback non-blockingly (live mode only)
+            if not demo and (up_ask is None or down_ask is None) and clob._subscribed_tokens:
+                if now - last_rest_poll_ts > 5.0:
+                    last_rest_poll_ts = now
+                    try:
+                        await asyncio.wait_for(asyncio.to_thread(clob.poll_rest_fallback), timeout=1.5)
+                        book_up = clob.get_book("Up")
+                        book_down = clob.get_book("Down")
+                        up_ask = book_up.best_ask() if book_up else None
+                        down_ask = book_down.best_ask() if book_down else None
+                    except Exception:
+                        pass
 
             dash_state.update_probabilities(
                 up_prob=up_ask,
@@ -271,6 +344,8 @@ async def run_paper(config: PolybotConfig) -> None:
                             "slug": sig.slug,
                             "cost": stake_usd,
                             "window_idx": current_window_idx,
+                            "window_end": (current_window_idx + 1) * 300,
+                            "last_checked_ts": 0.0,
                         })
                         dash_state.add_log(
                             "SIGNAL",
@@ -280,10 +355,26 @@ async def run_paper(config: PolybotConfig) -> None:
                         log.warning("Trade rejected by Risk Manager: %s", reason)
                         dash_state.add_log("WARNING", f"Risk rejected trade: {reason}")
 
-            # Check settlements
+            # Check settlements for concluded windows
             for item in list(open_trades_to_settle):
                 slug = item["slug"]
-                winner = client.get_winner(slug)
+                if now < item.get("window_end", 0):
+                    continue
+
+                if demo:
+                    winner = "Down"
+                else:
+                    if now - item.get("last_checked_ts", 0) < 10.0:
+                        continue
+                    item["last_checked_ts"] = now
+                    try:
+                        winner = await asyncio.wait_for(
+                            asyncio.to_thread(client.get_winner, slug),
+                            timeout=2.0
+                        )
+                    except Exception:
+                        winner = None
+
                 if winner:
                     settled_pos = engine.settle_window(slug, winner, now)
                     if settled_pos:
@@ -307,9 +398,13 @@ async def run_paper(config: PolybotConfig) -> None:
         dash_state.set_bot_status("STOPPED")
         if dash_server:
             await dash_server.stop()
-        await rtds.stop()
-        await binance.stop()
-        await clob.stop()
+        if not demo:
+            if rtds:
+                await rtds.stop()
+            if binance:
+                await binance.stop()
+            if clob:
+                await clob.stop()
         log.info("Paper engine stopped. Total realized PnL: $%+.2f", engine.get_total_realized_pnl())
 
 
@@ -348,6 +443,7 @@ def main() -> None:
     paper_parser.add_argument("--stake", type=float, default=None, help="Stake in USD (for edge/legacy)")
     paper_parser.add_argument("--port", type=int, default=8080, help="Local dashboard port")
     paper_parser.add_argument("--no-dashboard", action="store_true", help="Run headless without dashboard server")
+    paper_parser.add_argument("--demo", action="store_true", help="Simulate 5m market price & probability swings to test UI and strategy")
 
     # Dashboard standalone command
     dash_parser = subparsers.add_parser("dashboard", help="Run local web dashboard standalone")
@@ -384,7 +480,7 @@ def main() -> None:
         if args.no_dashboard:
             config.dashboard.enabled = False
         try:
-            asyncio.run(run_paper(config))
+            asyncio.run(run_paper(config, demo=getattr(args, "demo", False)))
         except KeyboardInterrupt:
             log.info("Stopped by user.")
     elif args.command == "dashboard":

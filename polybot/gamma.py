@@ -22,8 +22,8 @@ class PolymarketClient:
         self,
         gamma_url: str = "https://gamma-api.polymarket.com",
         clob_url: str = "https://clob.polymarket.com",
-        timeout: float = 8.0,
-        max_retries: int = 4,
+        timeout: float = 2.0,
+        max_retries: int = 0,
     ):
         self.gamma_url = gamma_url.rstrip("/")
         self.clob_url = clob_url.rstrip("/")
@@ -37,7 +37,9 @@ class PolymarketClient:
 
         retries = Retry(
             total=max_retries,
-            backoff_factor=0.4,
+            connect=0,
+            read=0,
+            backoff_factor=0.1,
             status_forcelist=[429, 500, 502, 503, 504],
             raise_on_status=False,
         )
@@ -51,8 +53,8 @@ class PolymarketClient:
             r.raise_for_status()
             return r.json()
         except Exception as e:
-            log.warning("HTTP request failed [%s]: %s", url, e)
-            raise
+            log.debug("HTTP request failed [%s]: %s", url, e)
+            return None
 
     def get_event(self, slug: str) -> Optional[Dict[str, Any]]:
         """Fetch market event by slug."""

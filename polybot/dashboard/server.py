@@ -87,7 +87,7 @@ def create_dashboard_app(state: DashboardState, ledger: TradeLedger) -> Starlett
 
 
 class DashboardServer:
-    """Manages the background Uvicorn server task."""
+    """Manages the background Uvicorn server in a dedicated thread."""
 
     def __init__(
         self,
@@ -96,15 +96,16 @@ class DashboardServer:
         host: str = "127.0.0.1",
         port: int = 8080,
     ):
+        import threading
         self.state = state
         self.ledger = ledger
         self.host = host
         self.port = port
         self.app = create_dashboard_app(state, ledger)
         self._server: Optional[uvicorn.Server] = None
-        self._task: Optional[asyncio.Task] = None
+        self._thread: Optional[threading.Thread] = None
 
-    async def start(self) -> None:
+    def _run_server(self) -> None:
         config = uvicorn.Config(
             app=self.app,
             host=self.host,
@@ -113,16 +114,27 @@ class DashboardServer:
             access_log=False,
         )
         self._server = uvicorn.Server(config)
-        self._task = asyncio.create_task(self._server.serve())
+        self._server.run()
+
+    async def start(self) -> None:
+        self.start_sync()
+
+    def start_sync(self) -> None:
+        import threading
+        import time
+        if self._thread and self._thread.is_alive():
+            return
+        self._thread = threading.Thread(target=self._run_server, daemon=True, name="DashboardServerThread")
+        self._thread.start()
+        time.sleep(0.15)
         log.info("Live Dashboard workstation running at http://%s:%d", self.host, self.port)
 
     async def stop(self) -> None:
+        self.stop_sync()
+
+    def stop_sync(self) -> None:
         if self._server:
             self._server.should_exit = True
-        if self._task and not self._task.done():
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=1.5)
         log.info("Dashboard workstation server stopped.")
