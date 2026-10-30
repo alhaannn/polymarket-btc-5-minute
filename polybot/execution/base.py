@@ -21,6 +21,11 @@ class Order:
     created_at_ts: float
     latency_ms: int = 400
     status: str = "PENDING"  # "PENDING", "FILLED", "CANCELLED", "REJECTED"
+    signal_type: str = "INITIAL"  # "INITIAL" or "REVERSAL"
+    linked_order_id: Optional[str] = None
+    trigger_prob: float = 0.0
+    counterpart_prob: float = 0.0
+    data_receipt_ts: float = 0.0
 
 
 @dataclass
@@ -35,6 +40,11 @@ class Fill:
     cost_usd: float
     fee_usd: float
     filled_at_ts: float
+    signal_type: str = "INITIAL"
+    linked_order_id: Optional[str] = None
+    trigger_prob: float = 0.0
+    counterpart_prob: float = 0.0
+    data_receipt_ts: float = 0.0
 
 
 @dataclass
@@ -51,6 +61,13 @@ class Position:
     settle_winner: Optional[str] = None
     payout_usd: float = 0.0
     realized_pnl_usd: float = 0.0
+    position_id: str = ""
+    order_id: str = ""
+    signal_type: str = "INITIAL"
+    linked_order_id: Optional[str] = None
+    trigger_prob: float = 0.0
+    counterpart_prob: float = 0.0
+    data_receipt_ts: float = 0.0
 
 
 class ExecutionEngine(ABC):

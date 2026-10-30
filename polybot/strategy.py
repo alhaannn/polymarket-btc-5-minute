@@ -34,6 +34,11 @@ class TradeSignal:
     model_prob: float
     expected_edge: float
     timestamp_sec: float
+    signal_type: str = "INITIAL"  # "INITIAL" or "REVERSAL"
+    linked_order_id: Optional[str] = None
+    trigger_prob: float = 0.0
+    counterpart_prob: float = 0.0
+    data_receipt_ts: float = 0.0
 
 
 class BaseStrategy(ABC):
@@ -328,3 +333,168 @@ class EdgeStrategy(BaseStrategy):
             )
 
         return None
+
+
+class ReversalStrategy(BaseStrategy):
+    """
+    Polymarket 5-Minute UP/DOWN Strategy (NEW_STRATEGY.md):
+    - 0-179 seconds: Waiting phase, observe only, NO trades.
+    - 180-299 seconds: Trading phase.
+        - Initial entry: When either UP or DOWN outcome probability is 89% to 92% inclusive,
+          trigger a $1 paper order for that outcome.
+        - Reversal entry: After initial order, continuously monitor opposite outcome.
+          When opposite outcome probability is 85% to 90% inclusive,
+          trigger a reversal paper order for 10x initial amount ($10).
+    - >= 300 seconds: Closed phase, no new entries.
+    """
+
+    def __init__(self, config: Optional[StrategyConfig] = None):
+        super().__init__(config or StrategyConfig())
+        self.window_start: int = 0
+        self.strike_price_K: Optional[float] = None
+        self.initial_order_placed: bool = False
+        self.initial_side: Optional[str] = None
+        self.initial_order_id: Optional[str] = None
+        self.reversal_order_placed: bool = False
+
+    def reset_window(self, window_start: int, strike_price_K: Optional[float] = None) -> None:
+        self.window_start = window_start
+        self.strike_price_K = strike_price_K
+        self.initial_order_placed = False
+        self.initial_side = None
+        self.initial_order_id = None
+        self.reversal_order_placed = False
+
+    def on_tick(
+        self,
+        current_price: float,
+        timestamp_sec: float,
+        books: Dict[str, TokenOrderBook],
+        health: Optional[FeedHealthTracker] = None,
+        data_receipt_ts: Optional[float] = None,
+    ) -> Optional[TradeSignal]:
+        elapsed = timestamp_sec - self.window_start
+        receipt_ts = data_receipt_ts or timestamp_sec
+
+        # 1. Strict time-window enforcement
+        # Waiting phase: first 180 seconds -> NO trades
+        if elapsed < self.config.reversal_window_start_sec:
+            return None
+
+        # Closed phase: at or after 300 seconds -> NO trades
+        if elapsed >= self.config.reversal_window_end_sec:
+            return None
+
+        # 2. Extract best asks (outcome probabilities) for Up and Down
+        book_up = books.get("Up")
+        book_down = books.get("Down")
+
+        up_prob = book_up.best_ask() if book_up else None
+        down_prob = book_down.best_ask() if book_down else None
+
+        # If data is completely missing, do not trigger
+        if up_prob is None and down_prob is None:
+            return None
+
+        # 3. Check INITIAL Entry (if not yet placed)
+        if not self.initial_order_placed:
+            for side, prob, counterpart_prob, book in (
+                ("Up", up_prob, down_prob, book_up),
+                ("Down", down_prob, up_prob, book_down),
+            ):
+                if prob is None or book is None:
+                    continue
+
+                # Range check: 89% <= prob <= 92% (inclusive)
+                if self.config.initial_prob_min <= prob <= self.config.initial_prob_max:
+                    fill = book.simulate_buy(self.config.initial_stake_usd)
+                    if fill is None:
+                        log.info(
+                            "ReversalStrategy %s ask %.3f in initial range [%.2f, %.2f] but depth thin for $%.2f",
+                            side, prob, self.config.initial_prob_min, self.config.initial_prob_max,
+                            self.config.initial_stake_usd
+                        )
+                        continue
+
+                    avg_price, shares, spent = fill
+                    fee = spent * self.config.taker_fee_rate
+                    order_id = f"init-{int(timestamp_sec * 1000)}"
+
+                    self.initial_order_placed = True
+                    self.initial_side = side
+                    self.initial_order_id = order_id
+
+                    log.info(
+                        "REVERSAL_STRAT INITIAL BUY %s @ %.3f x %.2f shares ($%.2f) at elapsed=%.1fs (prob=%.3f)",
+                        side, avg_price, shares, spent, elapsed, prob
+                    )
+                    return TradeSignal(
+                        slug=f"btc-updown-5m-{self.window_start}",
+                        side=side,
+                        action="BUY",
+                        order_type="taker",
+                        price=avg_price,
+                        shares=shares,
+                        cost_usd=spent,
+                        fee_usd=fee,
+                        elapsed_sec=elapsed,
+                        model_prob=prob,
+                        expected_edge=0.0,
+                        timestamp_sec=timestamp_sec,
+                        signal_type="INITIAL",
+                        trigger_prob=prob,
+                        counterpart_prob=counterpart_prob or 0.0,
+                        data_receipt_ts=receipt_ts,
+                    )
+
+        # 4. Check REVERSAL Entry (after initial order has been placed, and reversal not yet placed)
+        elif self.initial_order_placed and not self.reversal_order_placed and self.initial_side is not None:
+            opp_side = "Down" if self.initial_side == "Up" else "Up"
+            opp_book = books.get(opp_side)
+            opp_prob = opp_book.best_ask() if opp_book else None
+            initial_book = books.get(self.initial_side)
+            init_current_prob = initial_book.best_ask() if initial_book else 0.0
+
+            if opp_prob is not None and opp_book is not None:
+                # Range check: 85% <= opp_prob <= 90% (inclusive)
+                if self.config.reversal_prob_min <= opp_prob <= self.config.reversal_prob_max:
+                    reversal_stake = self.config.reversal_stake_usd
+                    fill = opp_book.simulate_buy(reversal_stake)
+                    if fill is None:
+                        log.info(
+                            "ReversalStrategy %s ask %.3f in reversal range [%.2f, %.2f] but depth thin for $%.2f",
+                            opp_side, opp_prob, self.config.reversal_prob_min, self.config.reversal_prob_max,
+                            reversal_stake
+                        )
+                        return None
+
+                    avg_price, shares, spent = fill
+                    fee = spent * self.config.taker_fee_rate
+                    self.reversal_order_placed = True
+
+                    log.info(
+                        "REVERSAL_STRAT REVERSAL BUY %s @ %.3f x %.2f shares ($%.2f) at elapsed=%.1fs (opp_prob=%.3f, linked=%s)",
+                        opp_side, avg_price, shares, spent, elapsed, opp_prob, self.initial_order_id
+                    )
+                    return TradeSignal(
+                        slug=f"btc-updown-5m-{self.window_start}",
+                        side=opp_side,
+                        action="BUY",
+                        order_type="taker",
+                        price=avg_price,
+                        shares=shares,
+                        cost_usd=spent,
+                        fee_usd=fee,
+                        elapsed_sec=elapsed,
+                        model_prob=opp_prob,
+                        expected_edge=0.0,
+                        timestamp_sec=timestamp_sec,
+                        signal_type="REVERSAL",
+                        linked_order_id=self.initial_order_id,
+                        trigger_prob=opp_prob,
+                        counterpart_prob=init_current_prob or 0.0,
+                        data_receipt_ts=receipt_ts,
+                    )
+
+        return None
+

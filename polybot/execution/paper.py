@@ -17,6 +17,9 @@ from polybot.feeds.clob_ws import TokenOrderBook
 log = logging.getLogger("polybot.execution.paper")
 
 
+from polybot.execution.ledger import TradeLedger
+
+
 class PaperExecutionEngine(ExecutionEngine):
     """
     Simulates realistic order execution:
@@ -24,17 +27,20 @@ class PaperExecutionEngine(ExecutionEngine):
     - Taker order book walking with slippage guard
     - Maker limit order resting with trade-through fills and timeout cancellations
     - Complete portfolio position and PnL accounting
+    - Persistent SQLite TradeLedger integration
     """
 
-    def __init__(self, config: Optional[StrategyConfig] = None):
+    def __init__(self, config: Optional[StrategyConfig] = None, ledger: Optional[TradeLedger] = None):
         self.config = config or StrategyConfig()
         self.fee_schedule = FeeSchedule(
             taker_rate=self.config.taker_fee_rate,
             maker_rate=self.config.maker_fee_rate,
         )
+        self.ledger = ledger or TradeLedger()
 
         self.pending_orders: List[Order] = []
-        self.open_positions: Dict[str, Position] = {}  # slug -> Position
+        self.open_positions: Dict[str, Position] = {}  # slug -> latest Position (backwards-compatible)
+        self.open_positions_list: List[Position] = []
         self.settled_positions: List[Position] = []
         self.all_fills: List[Fill] = []
 
@@ -127,9 +133,14 @@ class PaperExecutionEngine(ExecutionEngine):
                 cost_usd=spent,
                 fee_usd=fee,
                 filled_at_ts=current_ts,
+                signal_type=order.signal_type,
+                linked_order_id=order.linked_order_id,
+                trigger_prob=order.trigger_prob,
+                counterpart_prob=order.counterpart_prob,
+                data_receipt_ts=order.data_receipt_ts,
             )
             order.status = "FILLED"
-            self._record_fill(fill)
+            self._record_fill(fill, order)
             log.info(
                 "TAKER FILLED BUY %s %s @ %.3f x %.2f shares (cost=$%.2f, fee=$%.3f, lat=%dms)",
                 order.slug, order.side, avg_price, shares, spent, fee, order.latency_ms
@@ -157,9 +168,14 @@ class PaperExecutionEngine(ExecutionEngine):
                 cost_usd=received,
                 fee_usd=fee,
                 filled_at_ts=current_ts,
+                signal_type=order.signal_type,
+                linked_order_id=order.linked_order_id,
+                trigger_prob=order.trigger_prob,
+                counterpart_prob=order.counterpart_prob,
+                data_receipt_ts=order.data_receipt_ts,
             )
             order.status = "FILLED"
-            self._record_fill(fill)
+            self._record_fill(fill, order)
             log.info(
                 "TAKER FILLED SELL %s %s @ %.3f x %.2f shares (rec=$%.2f, fee=$%.3f)",
                 order.slug, order.side, avg_price, shares, received, fee
@@ -203,9 +219,14 @@ class PaperExecutionEngine(ExecutionEngine):
                 cost_usd=spent,
                 fee_usd=fee,
                 filled_at_ts=current_ts,
+                signal_type=order.signal_type,
+                linked_order_id=order.linked_order_id,
+                trigger_prob=order.trigger_prob,
+                counterpart_prob=order.counterpart_prob,
+                data_receipt_ts=order.data_receipt_ts,
             )
             order.status = "FILLED"
-            self._record_fill(fill)
+            self._record_fill(fill, order)
             log.info(
                 "MAKER FILLED BUY %s %s @ %.3f x %.2f shares (fee=$%.3f)",
                 order.slug, order.side, order.price, shares, fee
@@ -214,10 +235,11 @@ class PaperExecutionEngine(ExecutionEngine):
 
         return None, False
 
-    def _record_fill(self, fill: Fill) -> None:
+    def _record_fill(self, fill: Fill, order: Optional[Order] = None) -> None:
         self.all_fills.append(fill)
 
         if fill.action == "BUY":
+            pos_id = str(uuid.uuid4())[:8]
             pos = Position(
                 slug=fill.slug,
                 side=fill.side,
@@ -227,12 +249,48 @@ class PaperExecutionEngine(ExecutionEngine):
                 total_fees_usd=fill.fee_usd,
                 opened_at_ts=fill.filled_at_ts,
                 status="OPEN",
+                position_id=pos_id,
+                order_id=fill.order_id,
+                signal_type=fill.signal_type,
+                linked_order_id=fill.linked_order_id,
+                trigger_prob=fill.trigger_prob,
+                counterpart_prob=fill.counterpart_prob,
+                data_receipt_ts=fill.data_receipt_ts,
             )
             self.open_positions[fill.slug] = pos
+            self.open_positions_list.append(pos)
+
+            try:
+                lat = (fill.filled_at_ts - order.created_at_ts) * 1000.0 if order else 0.0
+                receipt_ts = order.data_receipt_ts if order and order.data_receipt_ts > 0 else fill.filled_at_ts
+                self.ledger.record_trade(
+                    order_id=fill.order_id,
+                    slug=fill.slug,
+                    side=fill.side,
+                    action=fill.action,
+                    order_type="taker" if (order and order.order_type == "taker") else "maker",
+                    signal_type=fill.signal_type,
+                    stake_usd=fill.cost_usd,
+                    shares=fill.shares,
+                    avg_price=fill.price,
+                    fee_usd=fill.fee_usd,
+                    exec_ts=fill.filled_at_ts,
+                    linked_order_id=fill.linked_order_id,
+                    trigger_prob=fill.trigger_prob,
+                    counterpart_prob=fill.counterpart_prob,
+                    data_receipt_ts=receipt_ts,
+                    signal_detection_ts=order.created_at_ts if order else fill.filled_at_ts,
+                    latency_ms=lat,
+                    status="OPEN",
+                )
+            except Exception as e:
+                log.warning("Ledger recording failed: %s", e)
 
         elif fill.action == "SELL":
             pos = self.open_positions.pop(fill.slug, None)
             if pos:
+                if pos in self.open_positions_list:
+                    self.open_positions_list.remove(pos)
                 pos.status = "CLOSED_EARLY"
                 pos.settled_at_ts = fill.filled_at_ts
                 pos.payout_usd = fill.cost_usd
@@ -241,27 +299,46 @@ class PaperExecutionEngine(ExecutionEngine):
                 self.settled_positions.append(pos)
 
     def settle_window(self, slug: str, winner: str, settle_ts: float) -> Optional[Position]:
-        """Settle an open position upon market resolution."""
-        pos = self.open_positions.pop(slug, None)
-        if not pos:
+        """Settle open position(s) upon market resolution."""
+        positions_to_settle = [p for p in self.open_positions_list if p.slug == slug and p.status == "OPEN"]
+
+        if not positions_to_settle and slug in self.open_positions:
+            pos = self.open_positions.get(slug)
+            if pos and pos.status == "OPEN":
+                positions_to_settle.append(pos)
+
+        if not positions_to_settle:
             return None
 
-        is_win = (winner == pos.side)
-        payout = pos.shares if is_win else 0.0
-        pnl = payout - pos.total_cost_usd - pos.total_fees_usd
+        try:
+            self.ledger.settle_slug(slug, winner, settle_ts)
+        except Exception as e:
+            log.warning("Ledger settlement failed for %s: %s", slug, e)
 
-        pos.status = "SETTLED"
-        pos.settled_at_ts = settle_ts
-        pos.settle_winner = winner
-        pos.payout_usd = round(payout, 4)
-        pos.realized_pnl_usd = round(pnl, 4)
+        last_settled = None
+        for pos in positions_to_settle:
+            is_win = (winner == pos.side)
+            payout = pos.shares if is_win else 0.0
+            pnl = payout - pos.total_cost_usd - pos.total_fees_usd
 
-        self.settled_positions.append(pos)
-        log.info(
-            "SETTLED %s position=%s winner=%s payout=$%.2f PnL=$%+.2f",
-            slug, pos.side, winner, payout, pnl
-        )
-        return pos
+            pos.status = "SETTLED"
+            pos.settled_at_ts = settle_ts
+            pos.settle_winner = winner
+            pos.payout_usd = round(payout, 4)
+            pos.realized_pnl_usd = round(pnl, 4)
+
+            self.settled_positions.append(pos)
+            if pos in self.open_positions_list:
+                self.open_positions_list.remove(pos)
+
+            log.info(
+                "SETTLED %s position=%s (%s) winner=%s payout=$%.2f PnL=$%+.2f",
+                slug, pos.side, pos.signal_type, winner, payout, pnl
+            )
+            last_settled = pos
+
+        self.open_positions.pop(slug, None)
+        return last_settled
 
     def get_total_realized_pnl(self) -> float:
         return sum(p.realized_pnl_usd for p in self.settled_positions)

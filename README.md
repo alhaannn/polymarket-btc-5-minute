@@ -11,17 +11,20 @@ polymarketbot/
 ├── polybot/
 │   ├── config.py              # Strongly-typed dataclasses + YAML + env overrides
 │   ├── gamma.py               # Market discovery, settlement polling, and CLOB REST fallback
+│   ├── session.py             # 300s market clock, monotonic timing, 180s waiting / 120s trading phases
 │   ├── recorder.py            # 24/7 lossless JSONL recorder with background thread batching
 │   ├── model.py               # Brownian probability P = Φ(z), dual EWMA volatility, Platt scaling
 │   ├── filters.py             # Pre-trade guards: adverse drift, vol spikes, liquidity, feed staleness
-│   ├── strategy.py            # Shared execution engine: LegacyStrategy & EdgeStrategy
+│   ├── strategy.py            # ReversalStrategy (NEW_STRATEGY.md), LegacyStrategy, EdgeStrategy
 │   ├── monitor.py             # Telegram alerts, heartbeats, and circuit breaker notifications
 │   ├── risk.py                # Daily drawdown limit, cooldown pauses, and 'STOP' file kill switch
 │   ├── sizing.py              # Fixed stake vs. Fractional Kelly criterion with hard caps
+│   ├── dashboard/             # Local light-themed Wall Street financial workstation UI (HTML/CSS/JS)
 │   ├── execution/
-│   │   ├── base.py            # Orders, Fills, and Position interfaces
+│   │   ├── base.py            # Orders, Fills, and Position interfaces (with audit metadata)
 │   │   ├── fees.py            # Maker / taker fee models
-│   │   ├── paper.py           # Simulated 400ms latency queue, book walking, and maker limits
+│   │   ├── ledger.py          # Persistent SQLite audit trail & hourly/daily/lifetime P&L analytics
+│   │   ├── paper.py           # Simulated latency queue, real order book walking, fill simulation
 │   │   └── live.py            # Double-gated micro-live module with startup reconciliation
 │   └── backtest/
 │       ├── loader.py          # Dual loader for polybot JSONL and polyticker archives
@@ -73,14 +76,28 @@ python backtest.py --sweep --data data/raw
 
 ---
 
-### 2.3 Paper Trading Bot
-Executes live simulated trades walking the real CLOB order book with simulated **400ms latency**.
-```bash
-# Probabilistic Edge Strategy
-python main.py paper --strategy edge --stake 5.0
+### 2.3 Paper Trading Bot & Live Local Web Dashboard
+Executes live simulated trades walking the real CLOB order book with simulated latency and auditable SQLite ledger.
+Automatically runs a live, light-themed Wall Street financial trading workstation dashboard at **`http://127.0.0.1:8080`**.
 
-# Legacy Strategy
+```bash
+# 5-Minute UP/DOWN Reversal Strategy (NEW_STRATEGY.md default)
+# - 0–179s: Waiting phase (no trades)
+# - 180–299s: Trading window
+# - Initial trade: 89%–92% ($1.00 stake)
+# - Reversal trade: 85%–90% opposite side (10x multiplier = $10.00 stake)
+python main.py paper --strategy reversal
+
+# Change dashboard port or run headless:
+python main.py paper --strategy reversal --port 8080
+python main.py paper --strategy reversal --no-dashboard
+
+# Run standalone dashboard anytime to inspect ledger & P&L history:
+python main.py dashboard --port 8080
+
+# Legacy & Probabilistic Edge Strategies (A/B testing)
 python main.py paper --strategy legacy
+python main.py paper --strategy edge --stake 5.0
 ```
 
 ---

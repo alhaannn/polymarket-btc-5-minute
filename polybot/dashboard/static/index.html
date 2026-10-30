@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Polymarket 5-Minute Paper Trading Workstation</title>
+  <meta name="description" content="Local light-themed financial workstation for Polymarket 5-minute probability reversal paper trading.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <!-- Header Bar -->
+  <header class="top-nav">
+    <div class="nav-brand">
+      <div class="brand-icon">PM</div>
+      <div class="brand-text">
+        <h1 class="brand-title">Polymarket 5-Minute Trading Workstation</h1>
+        <div class="brand-subtitle">Systematic Probability Reversal Simulation &bull; Paper Trading Only</div>
+      </div>
+    </div>
+
+    <div class="nav-metrics">
+      <div class="status-pill mode-paper" id="pill-paper-mode" title="Paper trading mode only. No live keys or real orders.">
+        <span class="status-dot"></span> PAPER SIMULATION
+      </div>
+      <div class="status-pill status-running" id="pill-bot-status">
+        <span class="status-dot" id="dot-bot-status"></span> <span id="text-bot-status">RUNNING</span>
+      </div>
+      <div class="status-pill feed-live" id="pill-feed-status">
+        <span class="status-dot" id="dot-feed-status"></span> <span id="text-feed-status">FEED: LIVE</span>
+      </div>
+      <div class="latency-badge" id="badge-latency" title="Measured local event processing latency">
+        <span class="latency-label">LATENCY:</span> <span id="val-latency">0.0 ms</span>
+      </div>
+      <div class="clock-display" id="clock-display">
+        <span id="clock-time">--:--:--</span> <span class="clock-tz" id="clock-tz">LOCAL</span>
+      </div>
+    </div>
+
+    <div class="nav-controls">
+      <button class="btn btn-primary" id="btn-control-start" onclick="sendControl('start')">▶ Run</button>
+      <button class="btn btn-secondary" id="btn-control-pause" onclick="sendControl('pause')">⏸ Pause</button>
+      <button class="btn btn-danger" id="btn-control-stop" onclick="sendControl('stop')">⏹ Stop</button>
+    </div>
+  </header>
+
+  <!-- Main Workstation Layout -->
+  <main class="dashboard-grid">
+
+    <!-- Row 1: Market Session Clock & Countdown -->
+    <section class="card market-session-card" id="card-market-session">
+      <div class="card-header">
+        <div class="header-left">
+          <span class="card-tag">MARKET CYCLE</span>
+          <h2 class="card-title" id="val-market-slug">btc-updown-5m-...</h2>
+        </div>
+        <div class="phase-badge phase-waiting" id="badge-market-phase">
+          WAITING PHASE (0 - 180s)
+        </div>
+      </div>
+
+      <div class="progress-container">
+        <div class="progress-track">
+          <div class="progress-bar-waiting" id="progress-bar-waiting" style="width: 0%;"></div>
+          <div class="progress-bar-trading" id="progress-bar-trading" style="width: 0%;"></div>
+        </div>
+        <div class="progress-markers">
+          <span class="marker marker-start">0s (Start)</span>
+          <span class="marker marker-gate">180s (Trading Window Opens)</span>
+          <span class="marker marker-end">300s (Expiry)</span>
+        </div>
+      </div>
+
+      <div class="session-stats-grid">
+        <div class="session-stat-item">
+          <div class="stat-label">Elapsed Time</div>
+          <div class="stat-value" id="val-elapsed-time">0.0s</div>
+        </div>
+        <div class="session-stat-item">
+          <div class="stat-label">Remaining Time</div>
+          <div class="stat-value" id="val-remaining-time">300.0s</div>
+        </div>
+        <div class="session-stat-item">
+          <div class="stat-label">Trading Window</div>
+          <div class="stat-value status-badge-inactive" id="val-window-status">NO TRADES (OBSERVE)</div>
+        </div>
+        <div class="session-stat-item">
+          <div class="stat-label">Data Freshness</div>
+          <div class="stat-value" id="val-data-freshness">< 0.5s ago</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Row 2: Live Probability & Strategy Decision Engine -->
+    <section class="card probabilities-card" id="card-probabilities">
+      <div class="card-header">
+        <div class="header-left">
+          <span class="card-tag">DECISION ENGINE</span>
+          <h2 class="card-title">Live Outcome Probabilities & Strategy Triggers</h2>
+        </div>
+        <div class="strategy-rule-info">
+          Initial: <span class="rule-highlight">89%–92% ($1)</span> | Reversal: <span class="rule-highlight">85%–90% ($10)</span>
+        </div>
+      </div>
+
+      <div class="prob-monitor-grid">
+        <!-- UP Outcome Box -->
+        <div class="outcome-box" id="box-outcome-up">
+          <div class="outcome-header">
+            <span class="outcome-pill pill-up">OUTCOME: UP</span>
+            <span class="outcome-book-ask" id="val-up-ask">Ask: --</span>
+          </div>
+          <div class="outcome-prob-display">
+            <span class="prob-large" id="val-up-prob">--%</span>
+            <span class="prob-cents" id="val-up-cents">(--¢)</span>
+          </div>
+          <div class="prob-gauge-track">
+            <div class="prob-gauge-fill gauge-up" id="gauge-up" style="width: 0%;"></div>
+            <div class="target-band target-initial" title="Initial Trigger Band: 89% - 92%"></div>
+            <div class="target-band target-reversal" title="Reversal Trigger Band: 85% - 90%"></div>
+          </div>
+          <div class="outcome-state-badge badge-neutral" id="badge-up-status">Awaiting Trading Window</div>
+        </div>
+
+        <!-- DOWN Outcome Box -->
+        <div class="outcome-box" id="box-outcome-down">
+          <div class="outcome-header">
+            <span class="outcome-pill pill-down">OUTCOME: DOWN</span>
+            <span class="outcome-book-ask" id="val-down-ask">Ask: --</span>
+          </div>
+          <div class="outcome-prob-display">
+            <span class="prob-large" id="val-down-prob">--%</span>
+            <span class="prob-cents" id="val-down-cents">(--¢)</span>
+          </div>
+          <div class="prob-gauge-track">
+            <div class="prob-gauge-fill gauge-down" id="gauge-down" style="width: 0%;"></div>
+            <div class="target-band target-initial" title="Initial Trigger Band: 89% - 92%"></div>
+            <div class="target-band target-reversal" title="Reversal Trigger Band: 85% - 90%"></div>
+          </div>
+          <div class="outcome-state-badge badge-neutral" id="badge-down-status">Awaiting Trading Window</div>
+        </div>
+      </div>
+
+      <!-- Current Window Strategy Execution State -->
+      <div class="window-strategy-status-panel">
+        <div class="exec-step-item" id="step-initial">
+          <div class="step-icon" id="icon-step-initial">1</div>
+          <div class="step-content">
+            <div class="step-title">Initial Entry ($1.00)</div>
+            <div class="step-desc" id="desc-step-initial">Monitoring for 89%–92% in trading window</div>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="exec-step-item" id="step-reversal">
+          <div class="step-icon" id="icon-step-reversal">2</div>
+          <div class="step-content">
+            <div class="step-title">Reversal Entry ($10.00)</div>
+            <div class="step-desc" id="desc-step-reversal">Awaiting initial trade</div>
+          </div>
+        </div>
+        <div class="step-arrow">&rarr;</div>
+        <div class="exec-step-item" id="step-settlement">
+          <div class="step-icon" id="icon-step-settlement">3</div>
+          <div class="step-content">
+            <div class="step-title">Binary Resolution</div>
+            <div class="step-desc" id="desc-step-settlement">Hold to market expiry (300s)</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Row 3: Performance Accounting & P&L Cards -->
+    <section class="card performance-card" id="card-performance">
+      <div class="card-header">
+        <div class="header-left">
+          <span class="card-tag">PERFORMANCE LEDGER</span>
+          <h2 class="card-title">Accounting & Cumulative P&L</h2>
+        </div>
+        <div class="time-tabs" id="perf-tabs">
+          <button class="tab-btn active" data-tab="lifetime" id="tab-lifetime" onclick="switchPerfTab('lifetime')">Lifetime</button>
+          <button class="tab-btn" data-tab="day" id="tab-day" onclick="switchPerfTab('day')">Today</button>
+          <button class="tab-btn" data-tab="hour" id="tab-hour" onclick="switchPerfTab('hour')">Current Hour</button>
+        </div>
+      </div>
+
+      <div class="metrics-summary-grid">
+        <div class="metric-card pnl-card">
+          <div class="metric-label">Net Profit / Loss</div>
+          <div class="metric-large pnl-neutral" id="val-net-pnl">$0.00</div>
+          <div class="metric-sublabel" id="val-pnl-status">NO REALIZED TRADES</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Win Rate</div>
+          <div class="metric-large" id="val-win-rate">0.0%</div>
+          <div class="metric-sublabel" id="val-win-count">0 Wins / 0 Losses</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Gross Profit</div>
+          <div class="metric-large text-green" id="val-gross-profit">$0.00</div>
+          <div class="metric-sublabel">Winning payouts</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Gross Loss</div>
+          <div class="metric-large text-red" id="val-gross-loss">$0.00</div>
+          <div class="metric-sublabel">Unrealized / lost stakes</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Orders Placed</div>
+          <div class="metric-large" id="val-total-orders">0</div>
+          <div class="metric-sublabel" id="val-order-split">0 Init ($1) &bull; 0 Rev ($10)</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Reversals Detected</div>
+          <div class="metric-large" id="val-reversals-count">0</div>
+          <div class="metric-sublabel" id="val-markets-count">0 Markets Observed</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Row 4: Live Event Stream & Activity Feed -->
+    <section class="card activity-card" id="card-activity">
+      <div class="card-header">
+        <div class="header-left">
+          <span class="card-tag">AUDIT LOG</span>
+          <h2 class="card-title">Real-time Execution & Telemetry Log</h2>
+        </div>
+        <button class="btn btn-sm btn-outline" id="btn-clear-logs" onclick="clearLocalLogs()">Clear Display</button>
+      </div>
+      <div class="log-stream-container" id="log-stream">
+        <div class="log-empty">Listening for engine events...</div>
+      </div>
+    </section>
+
+    <!-- Row 5: Detailed Auditable Trade Ledger Table -->
+    <section class="card trade-history-card" id="card-trades">
+      <div class="card-header">
+        <div class="header-left">
+          <span class="card-tag">TRADE ARCHIVE</span>
+          <h2 class="card-title">Simulated Orders & Position Ledger</h2>
+        </div>
+        <button class="btn btn-sm btn-outline" id="btn-export-csv" onclick="exportTradesCSV()">Export CSV</button>
+      </div>
+
+      <div class="table-responsive">
+        <table class="trades-table" id="table-trades">
+          <thead>
+            <tr>
+              <th>Order ID</th>
+              <th>Market Slug</th>
+              <th>Type</th>
+              <th>Side</th>
+              <th>Amount ($)</th>
+              <th>Shares</th>
+              <th>Avg Fill</th>
+              <th>Trigger Prob</th>
+              <th>Latency</th>
+              <th>Execution Time</th>
+              <th>Status</th>
+              <th>Winner</th>
+              <th>Net P&L</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-trades">
+            <tr class="table-row-empty">
+              <td colspan="13">No paper trades recorded yet in this session.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="bottom-footer">
+    <div class="footer-left">
+      <span>Polymarket 5-Minute Paper System</span> &bull; <span>Local Terminal v0.2.0</span> &bull; <span>Read-Only Market Data</span>
+    </div>
+    <div class="footer-right">
+      <span class="safety-indicator">&check; Live Trading Submissions Strictly Disabled</span>
+    </div>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

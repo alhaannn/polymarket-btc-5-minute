@@ -14,13 +14,13 @@ from polybot.backtest.loader import WindowDataLoader
 from polybot.backtest.report import BacktestReporter
 from polybot.backtest.sweep import ParameterSweeper
 from polybot.config import PolybotConfig
-from polybot.strategy import EdgeStrategy, LegacyStrategy
+from polybot.strategy import EdgeStrategy, LegacyStrategy, ReversalStrategy
 
 
 def main():
     parser = argparse.ArgumentParser(description="Polymarket Historical Backtester")
     parser.add_argument("--data", type=str, default="data/raw", help="Directory of raw window folders or .tar.gz archives")
-    parser.add_argument("--strategy", choices=["legacy", "edge"], default="edge", help="Strategy to test")
+    parser.add_argument("--strategy", choices=["reversal", "legacy", "edge"], default="reversal", help="Strategy to test")
     parser.add_argument("--sweep", action="store_true", help="Run full parameter grid sweep with hold-out validation")
     parser.add_argument("--stake", type=float, default=5.0, help="Stake size in USD")
     parser.add_argument("--min-edge", type=float, default=0.02, help="Minimum edge threshold")
@@ -56,7 +56,13 @@ def main():
         return
 
     # Single strategy backtest
-    strat = LegacyStrategy(cfg.strategy) if args.strategy == "legacy" else EdgeStrategy(cfg.strategy)
+    if args.strategy == "legacy":
+        strat = LegacyStrategy(cfg.strategy)
+    elif args.strategy == "reversal":
+        strat = ReversalStrategy(cfg.strategy)
+    else:
+        strat = EdgeStrategy(cfg.strategy)
+
     engine = BacktestEngine(cfg)
     trades = engine.run(windows, strategy=strat)
 

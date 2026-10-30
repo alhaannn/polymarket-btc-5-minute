@@ -105,6 +105,19 @@ class StrategyConfig:
     taker_fee_rate: float = 0.001
     maker_fee_rate: float = 0.000
 
+    # New 5-minute Reversal Strategy (NEW_STRATEGY.md)
+    initial_stake_usd: float = 1.0
+    reversal_stake_usd: float = 10.0
+    initial_prob_min: float = 0.89
+    initial_prob_max: float = 0.92
+    reversal_prob_min: float = 0.85
+    reversal_prob_max: float = 0.90
+    reversal_window_start_sec: float = 180.0
+    reversal_window_end_sec: float = 300.0
+    max_initial_orders_per_window: int = 1
+    max_reversal_orders_per_initial: int = 1
+    reporting_timezone: str = "local"
+
     @classmethod
     def from_env(cls) -> StrategyConfig:
         return cls(
@@ -130,6 +143,17 @@ class StrategyConfig:
             max_slippage=_get_env_val("MAX_SLIPPAGE", 0.015, float),
             taker_fee_rate=_get_env_val("TAKER_FEE_RATE", 0.001, float),
             maker_fee_rate=_get_env_val("MAKER_FEE_RATE", 0.000, float),
+            initial_stake_usd=_get_env_val("INITIAL_STAKE_USD", 1.0, float),
+            reversal_stake_usd=_get_env_val("REVERSAL_STAKE_USD", 10.0, float),
+            initial_prob_min=_get_env_val("INITIAL_PROB_MIN", 0.89, float),
+            initial_prob_max=_get_env_val("INITIAL_PROB_MAX", 0.92, float),
+            reversal_prob_min=_get_env_val("REVERSAL_PROB_MIN", 0.85, float),
+            reversal_prob_max=_get_env_val("REVERSAL_PROB_MAX", 0.90, float),
+            reversal_window_start_sec=_get_env_val("REVERSAL_WINDOW_START_SEC", 180.0, float),
+            reversal_window_end_sec=_get_env_val("REVERSAL_WINDOW_END_SEC", 300.0, float),
+            max_initial_orders_per_window=_get_env_val("MAX_INITIAL_ORDERS_PER_WINDOW", 1, int),
+            max_reversal_orders_per_initial=_get_env_val("MAX_REVERSAL_ORDERS_PER_INITIAL", 1, int),
+            reporting_timezone=os.getenv("REPORTING_TIMEZONE", "local"),
         )
 
 
@@ -186,12 +210,28 @@ class LiveConfig:
 
 
 @dataclass
+class DashboardConfig:
+    host: str = "127.0.0.1"
+    port: int = 8080
+    enabled: bool = True
+
+    @classmethod
+    def from_env(cls) -> DashboardConfig:
+        return cls(
+            host=os.getenv("DASHBOARD_HOST", "127.0.0.1"),
+            port=_get_env_val("DASHBOARD_PORT", 8080, int),
+            enabled=_get_env_val("DASHBOARD_ENABLED", True, bool),
+        )
+
+
+@dataclass
 class PolybotConfig:
     feeds: FeedsConfig = field(default_factory=FeedsConfig.from_env)
     recorder: RecorderConfig = field(default_factory=RecorderConfig.from_env)
     strategy: StrategyConfig = field(default_factory=StrategyConfig.from_env)
     risk: RiskConfig = field(default_factory=RiskConfig.from_env)
     live: LiveConfig = field(default_factory=LiveConfig.from_env)
+    dashboard: DashboardConfig = field(default_factory=DashboardConfig.from_env)
 
     @classmethod
     def load(cls, config_path: Optional[str | Path] = None) -> PolybotConfig:
