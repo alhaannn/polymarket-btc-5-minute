@@ -67,9 +67,13 @@ class BinanceFeed:
             except Exception as e:
                 if not self._running:
                     break
-                log.warning("Binance connection error: %s. Reconnecting in %.1fs...", e, delay)
-                await asyncio.sleep(delay)
-                delay = min(delay * 2.0, self.max_reconnect_delay)
+                if "451" in str(e):
+                    log.info("Binance feed geographically restricted (HTTP 451). Price powered by Polymarket RTDS.")
+                    await asyncio.sleep(60.0)
+                else:
+                    log.warning("Binance connection error: %s. Reconnecting in %.1fs...", e, delay)
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2.0, self.max_reconnect_delay)
 
     def _process_message(self, message: str) -> None:
         try:

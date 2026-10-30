@@ -286,9 +286,16 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
             up_bid = clob.get_effective_bid("Up")
             down_bid = clob.get_effective_bid("Down")
 
-            # Check if CLOB WS has books; if not, poll rest fallback non-blockingly (live mode only)
-            if not demo and (up_ask is None or down_ask is None) and clob._subscribed_tokens:
-                if now - last_rest_poll_ts > 5.0:
+            # Check if order books are empty or stale (>1.5s since last tick); if so, poll REST fallback
+            if not demo and clob._subscribed_tokens:
+                newest_update_ts = max(
+                    (b.last_update_ts for b in clob.books.values() if b.last_update_ts > 0),
+                    default=0.0
+                )
+                book_is_stale = (now - newest_update_ts > 1.5)
+                books_missing = (up_ask is None or down_ask is None)
+
+                if (books_missing or book_is_stale) and (now - last_rest_poll_ts > 1.5):
                     last_rest_poll_ts = now
                     try:
                         await asyncio.wait_for(asyncio.to_thread(clob.poll_rest_fallback), timeout=1.5)

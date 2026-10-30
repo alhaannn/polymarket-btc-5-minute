@@ -209,16 +209,15 @@ class CLOBOrderBookFeed:
             if tid not in self.books:
                 self.books[tid] = TokenOrderBook(tid)
 
-        # If already connected, dynamically send new market subscription immediately
+        # Polymarket CLOB WS rejects secondary market subscriptions with 'INVALID OPERATION'.
+        # We cleanly close the current socket so _run_loop immediately connects a fresh socket
+        # with the newly discovered tokens!
         if self._ws_connected and self._ws:
             try:
-                sub_msg = {
-                    "assets_ids": self._subscribed_tokens,
-                    "type": "market",
-                }
-                asyncio.create_task(self._ws.send(json.dumps(sub_msg)))
+                self._is_reconnecting_for_rollover = True
+                asyncio.create_task(self._ws.close())
             except Exception as e:
-                log.debug("Failed to send dynamic CLOB sub_msg: %s", e)
+                log.debug("Failed to close socket for token rollover: %s", e)
 
     def get_book(self, side_or_token: str) -> Optional[TokenOrderBook]:
         if side_or_token in self.books:
@@ -279,9 +278,16 @@ class CLOBOrderBookFeed:
                 self._ws_connected = False
                 if not self._running:
                     break
-                log.warning("CLOB WS error: %s. Reconnecting in %.1fs...", e, delay)
-                await asyncio.sleep(delay)
-                delay = min(delay * 2.0, 30.0)
+                if getattr(self, "_is_reconnecting_for_rollover", False):
+                    self._is_reconnecting_for_rollover = False
+                    await asyncio.sleep(0.05)
+                else:
+                    log.warning("CLOB WS error: %s. Reconnecting in %.1fs...", e, delay)
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2.0, 30.0)
+            finally:
+                self._ws_connected = False
+                self._ws = None
 
     def _process_message(self, message: str) -> None:
         try:
