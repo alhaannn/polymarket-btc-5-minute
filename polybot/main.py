@@ -463,6 +463,7 @@ def main() -> None:
     paper_parser.add_argument("--strategy", choices=["reversal", "legacy", "edge"], default="reversal", help="Strategy to run")
     paper_parser.add_argument("--stake", type=float, default=None, help="Stake in USD (for edge/legacy)")
     paper_parser.add_argument("--port", type=int, default=8080, help="Local dashboard port")
+    paper_parser.add_argument("--host", type=str, default=None, help="Dashboard host (e.g. 0.0.0.0 for VPS access)")
     paper_parser.add_argument("--no-dashboard", action="store_true", help="Run headless without dashboard server")
     paper_parser.add_argument("--demo", action="store_true", help="Simulate 5m market price & probability swings to test UI and strategy")
 
@@ -498,6 +499,8 @@ def main() -> None:
             config.strategy.stake_usd = args.stake
         if args.port:
             config.dashboard.port = args.port
+        if getattr(args, "host", None):
+            config.dashboard.host = args.host
         if args.no_dashboard:
             config.dashboard.enabled = False
         try:
