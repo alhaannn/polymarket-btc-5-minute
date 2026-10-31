@@ -73,10 +73,17 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
     from polybot.feeds.health import FeedHealthTracker
     from polybot.feeds.rtds import RTDSFeed
     from polybot.gamma import PolymarketClient
+    from polybot.capital import CapitalManager, DynamicTradeBudgetCalculator
     from polybot.risk import RiskManager
     from polybot.session import MarketSessionManager
     from polybot.sizing import PositionSizer
     from polybot.strategy import EdgeStrategy, LegacyStrategy, ReversalStrategy
+
+    capital_mgr = CapitalManager(db_path=config.recorder.data_dir / "paper_ledger.db", starting_equity_usd=11.0)
+    budget_calc = DynamicTradeBudgetCalculator(
+        min_order_usd=1.0,
+        taker_fee_rate=config.strategy.taker_fee_rate
+    )
 
     log.info(
         "PAPER MODE ACTIVE | strategy=%s initial_stake=$%.2f reversal_stake=$%.2f latency=%dms demo=%s",
@@ -337,10 +344,29 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
             # Check for trade signal if not paused (passing side_books)
             if not is_paused:
                 cur_price = health.chainlink.last_price or 0.0
+
+                if isinstance(strat, ReversalStrategy):
+                    init_b, rev_b = budget_calc.get_budgets(capital_mgr.state.active_capital)
+                    strat.set_dynamic_budgets(init_b, rev_b)
+
                 sig = strat.on_tick(cur_price, now, clob.side_books, health)
                 if sig:
                     stake_usd = sig.cost_usd
                     risk.sync_open_exposure(engine.get_open_exposure())
+
+                    # Pre-trade dynamic budget & free active funds validation
+                    b_val = budget_calc.validate_order_budget(
+                        signal_type=sig.signal_type,
+                        active_capital_usd=capital_mgr.state.active_capital,
+                        open_exposure_usd=engine.get_open_exposure(),
+                    )
+                    if not b_val.allowed:
+                        if hasattr(strat, "on_order_rejected"):
+                            strat.on_order_rejected(sig.signal_type)
+                        log.warning("Order budget rejected: %s", b_val.reason)
+                        dash_state.add_log("WARNING", f"Budget rejected: {b_val.reason}")
+                        continue
+
                     allowed, reason = risk.check_trade_allowed(stake_usd, current_window_idx)
                     if allowed:
                         order = Order(

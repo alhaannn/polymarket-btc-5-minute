@@ -356,6 +356,13 @@ class ReversalStrategy(BaseStrategy):
         self.initial_side: Optional[str] = None
         self.initial_order_id: Optional[str] = None
         self.reversal_order_placed: bool = False
+        self.dynamic_initial_usd: Optional[float] = None
+        self.dynamic_reversal_usd: Optional[float] = None
+
+    def set_dynamic_budgets(self, initial_usd: Optional[float], reversal_usd: Optional[float]) -> None:
+        """Sets capital-derived dynamic order budgets for the strategy."""
+        self.dynamic_initial_usd = initial_usd
+        self.dynamic_reversal_usd = reversal_usd
 
     def reset_window(self, window_start: int, strike_price_K: Optional[float] = None) -> None:
         self.window_start = window_start
@@ -428,13 +435,14 @@ class ReversalStrategy(BaseStrategy):
 
                 # Range check: 89% <= prob <= 92% (inclusive)
                 if self.config.initial_prob_min <= prob <= self.config.initial_prob_max:
+                    initial_stake = self.dynamic_initial_usd if self.dynamic_initial_usd is not None else self.config.initial_stake_usd
                     opp_bids = opp_b.get_sorted_bids() if opp_b else None
-                    fill = book.simulate_buy(self.config.initial_stake_usd, opposing_bids=opp_bids)
+                    fill = book.simulate_buy(initial_stake, opposing_bids=opp_bids)
                     if fill is None:
                         log.info(
                             "ReversalStrategy %s ask %.3f in initial range [%.2f, %.2f] but depth thin for $%.2f",
                             side, prob, self.config.initial_prob_min, self.config.initial_prob_max,
-                            self.config.initial_stake_usd
+                            initial_stake
                         )
                         continue
 
@@ -480,7 +488,7 @@ class ReversalStrategy(BaseStrategy):
             if opp_prob is not None and opp_book is not None:
                 # Range check: 85% <= opp_prob <= 90% (inclusive)
                 if self.config.reversal_prob_min <= opp_prob <= self.config.reversal_prob_max:
-                    reversal_stake = self.config.reversal_stake_usd
+                    reversal_stake = self.dynamic_reversal_usd if self.dynamic_reversal_usd is not None else self.config.reversal_stake_usd
                     init_bids = initial_book.get_sorted_bids() if initial_book else None
                     fill = opp_book.simulate_buy(reversal_stake, opposing_bids=init_bids)
                     if fill is None:
