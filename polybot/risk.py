@@ -35,6 +35,10 @@ class RiskManager:
         self.consecutive_api_errors: int = 0
         self.current_open_exposure: float = 0.0
 
+    def sync_open_exposure(self, exposure_usd: float) -> None:
+        """Synchronizes open exposure directly with active positions to prevent drift/leaks."""
+        self.current_open_exposure = max(0.0, float(exposure_usd))
+
     def _check_day_rollover(self) -> None:
         today = time.strftime("%Y-%m-%d")
         if today != self.current_day:

@@ -365,6 +365,15 @@ class ReversalStrategy(BaseStrategy):
         self.initial_order_id = None
         self.reversal_order_placed = False
 
+    def on_order_rejected(self, signal_type: str) -> None:
+        """Called when an order signal is rejected (e.g. by RiskManager) so state does not permanently latch."""
+        if signal_type == "INITIAL":
+            self.initial_order_placed = False
+            self.initial_side = None
+            self.initial_order_id = None
+        elif signal_type == "REVERSAL":
+            self.reversal_order_placed = False
+
     def on_tick(
         self,
         current_price: float,

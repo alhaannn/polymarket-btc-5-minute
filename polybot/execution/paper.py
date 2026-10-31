@@ -314,8 +314,8 @@ class PaperExecutionEngine(ExecutionEngine):
                 pos.realized_pnl_usd = pos.payout_usd - pos.total_cost_usd - pos.total_fees_usd
                 self.settled_positions.append(pos)
 
-    def settle_window(self, slug: str, winner: str, settle_ts: float) -> Optional[Position]:
-        """Settle open position(s) upon market resolution."""
+    def settle_window_all(self, slug: str, winner: str, settle_ts: float) -> List[Position]:
+        """Settle all open position(s) for a window slug upon market resolution."""
         positions_to_settle = [p for p in self.open_positions_list if p.slug == slug and p.status == "OPEN"]
 
         if not positions_to_settle and slug in self.open_positions:
@@ -324,14 +324,14 @@ class PaperExecutionEngine(ExecutionEngine):
                 positions_to_settle.append(pos)
 
         if not positions_to_settle:
-            return None
+            return []
 
         try:
             self.ledger.settle_slug(slug, winner, settle_ts)
         except Exception as e:
             log.warning("Ledger settlement failed for %s: %s", slug, e)
 
-        last_settled = None
+        settled_list = []
         for pos in positions_to_settle:
             is_win = (winner == pos.side)
             payout = pos.shares if is_win else 0.0
@@ -351,10 +351,19 @@ class PaperExecutionEngine(ExecutionEngine):
                 "SETTLED %s position=%s (%s) winner=%s payout=$%.2f PnL=$%+.2f",
                 slug, pos.side, pos.signal_type, winner, payout, pnl
             )
-            last_settled = pos
+            settled_list.append(pos)
 
         self.open_positions.pop(slug, None)
-        return last_settled
+        return settled_list
+
+    def settle_window(self, slug: str, winner: str, settle_ts: float) -> Optional[Position]:
+        """Settle open position(s) upon market resolution, returning the primary/last settled position."""
+        settled = self.settle_window_all(slug, winner, settle_ts)
+        return settled[-1] if settled else None
+
+    def get_open_exposure(self) -> float:
+        """Returns total USD cost of all currently open positions."""
+        return sum(p.total_cost_usd for p in self.open_positions_list if p.status == "OPEN")
 
     def get_total_realized_pnl(self) -> float:
         return sum(p.realized_pnl_usd for p in self.settled_positions)

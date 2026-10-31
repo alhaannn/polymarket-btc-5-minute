@@ -340,6 +340,7 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
                 sig = strat.on_tick(cur_price, now, clob.side_books, health)
                 if sig:
                     stake_usd = sig.cost_usd
+                    risk.sync_open_exposure(engine.get_open_exposure())
                     allowed, reason = risk.check_trade_allowed(stake_usd, current_window_idx)
                     if allowed:
                         order = Order(
@@ -373,21 +374,23 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
                             f"Signal triggered: {sig.signal_type} {sig.side} (${stake_usd:.2f}) prob={sig.trigger_prob:.3f}"
                         )
                     else:
+                        if hasattr(strat, "on_order_rejected"):
+                            strat.on_order_rejected(sig.signal_type)
                         log.warning("Trade rejected by Risk Manager: %s", reason)
                         dash_state.add_log("WARNING", f"Risk rejected trade: {reason}")
 
             # Check settlements for concluded windows
-            for item in list(open_trades_to_settle):
-                slug = item["slug"]
-                if now < item.get("window_end", 0):
-                    continue
-
+            pending_slugs = {item["slug"] for item in open_trades_to_settle if now >= item.get("window_end", 0)}
+            for slug in pending_slugs:
                 if demo:
                     winner = "Down"
                 else:
-                    if now - item.get("last_checked_ts", 0) < 10.0:
+                    last_check = next((it.get("last_checked_ts", 0.0) for it in open_trades_to_settle if it["slug"] == slug), 0.0)
+                    if now - last_check < 10.0:
                         continue
-                    item["last_checked_ts"] = now
+                    for it in open_trades_to_settle:
+                        if it["slug"] == slug:
+                            it["last_checked_ts"] = now
                     try:
                         winner = await asyncio.wait_for(
                             asyncio.to_thread(client.get_winner, slug),
@@ -397,19 +400,23 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
                         winner = None
 
                 if winner:
-                    settled_pos = engine.settle_window(slug, winner, now)
-                    if settled_pos:
-                        risk.record_trade_settled(settled_pos.realized_pnl_usd, item["cost"], item["window_idx"])
+                    settled_positions = engine.settle_window_all(slug, winner, now)
+                    for settled_pos in settled_positions:
+                        risk.record_trade_settled(settled_pos.realized_pnl_usd, settled_pos.total_cost_usd, current_window_idx)
                         dash_state.add_log(
                             "SETTLED",
-                            f"Settled {slug}: winner={winner} | PnL=${settled_pos.realized_pnl_usd:+.2f}"
+                            f"Settled {slug}: position={settled_pos.side} ({settled_pos.signal_type}) winner={winner} | PnL=${settled_pos.realized_pnl_usd:+.2f}"
                         )
                         log.info(
-                            "PAPER POSITION SETTLED | PnL=$%+.2f | Total PnL=$%+.2f",
+                            "PAPER POSITION SETTLED %s %s (%s) | PnL=$%+.2f | Total PnL=$%+.2f",
+                            slug,
+                            settled_pos.side,
+                            settled_pos.signal_type,
                             settled_pos.realized_pnl_usd,
                             engine.get_total_realized_pnl(),
                         )
-                    open_trades_to_settle.remove(item)
+                    open_trades_to_settle = [it for it in open_trades_to_settle if it["slug"] != slug]
+                    risk.sync_open_exposure(engine.get_open_exposure())
 
             await asyncio.sleep(0.5)
 

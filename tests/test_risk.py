@@ -64,3 +64,19 @@ def test_risk_kill_switch_file(tmp_path: Path):
     ok, reason = risk.check_trade_allowed(5.0, current_window_idx=1)
     assert not ok
     assert "kill switch" in reason.lower()
+
+
+def test_risk_sync_open_exposure():
+    cfg = RiskConfig(max_open_exposure_usd=20.0)
+    risk = RiskManager(cfg)
+
+    risk.record_trade_placed(10.0)
+    assert risk.current_open_exposure == 10.0
+
+    # Sync with engine having 0 open positions -> resets exposure immediately
+    risk.sync_open_exposure(0.0)
+    assert risk.current_open_exposure == 0.0
+
+    # Allows placing full trade again
+    ok, _ = risk.check_trade_allowed(proposed_stake_usd=10.0, current_window_idx=1)
+    assert ok

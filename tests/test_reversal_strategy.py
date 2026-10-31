@@ -119,3 +119,40 @@ def test_market_close_boundary():
     # At elapsed 305.0s
     sig_late = strat.on_tick(current_price=80000.0, timestamp_sec=1305.0, books=books)
     assert sig_late is None
+
+
+def test_reversal_strategy_on_order_rejected():
+    """Verify that on_order_rejected unlatches strategy state so orders can be retried."""
+    strat = ReversalStrategy()
+    strat.reset_window(window_start=1000)
+
+    # Trigger INITIAL order
+    books = create_mock_books(up_ask=0.90, down_ask=0.10)
+    sig_init = strat.on_tick(current_price=80000.0, timestamp_sec=1190.0, books=books)
+    assert sig_init is not None
+    assert strat.initial_order_placed
+
+    # Simulate rejection by RiskManager
+    strat.on_order_rejected("INITIAL")
+    assert not strat.initial_order_placed
+    assert strat.initial_side is None
+
+    # Next tick can re-trigger INITIAL
+    sig_retry = strat.on_tick(current_price=80000.0, timestamp_sec=1195.0, books=books)
+    assert sig_retry is not None
+    assert strat.initial_order_placed
+
+    # Now trigger REVERSAL
+    b_rev = create_mock_books(up_ask=0.12, down_ask=0.88)
+    sig_rev = strat.on_tick(current_price=80000.0, timestamp_sec=1210.0, books=b_rev)
+    assert sig_rev is not None
+    assert strat.reversal_order_placed
+
+    # Simulate REVERSAL rejection
+    strat.on_order_rejected("REVERSAL")
+    assert not strat.reversal_order_placed
+
+    # Next tick can re-trigger REVERSAL
+    sig_rev_retry = strat.on_tick(current_price=80000.0, timestamp_sec=1215.0, books=b_rev)
+    assert sig_rev_retry is not None
+    assert strat.reversal_order_placed

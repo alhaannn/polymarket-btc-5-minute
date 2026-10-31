@@ -122,3 +122,38 @@ def test_position_settlement_pnl():
     assert pytest.approx(pos_win.payout_usd) == 10.0
     assert pytest.approx(pos_win.realized_pnl_usd, abs=0.02) == 0.991
     assert engine.get_total_realized_pnl() > 0
+
+
+def test_settle_multiple_positions_reversal():
+    """Verify both Initial and Reversal orders in the same window settle and clear exposure."""
+    cfg = StrategyConfig(latency_ms=0)
+    engine = PaperExecutionEngine(cfg)
+    book_up = TokenOrderBook(token_id="tok-up")
+    book_up.asks = {0.90: 100.0}
+    book_down = TokenOrderBook(token_id="tok-down")
+    book_down.asks = {0.90: 100.0}
+    books = {"Up": book_up, "Down": book_down}
+
+    # Initial order: $1.00 on Down
+    ord1 = Order("ord-init", "btc-updown-5m-2000", "Down", "BUY", "taker", 0.90, 1.0, 0.0, 2000.0, latency_ms=0, signal_type="INITIAL")
+    # Reversal order: $10.00 on Up
+    ord2 = Order("ord-rev", "btc-updown-5m-2000", "Up", "BUY", "taker", 0.90, 10.0, 0.0, 2020.0, latency_ms=0, signal_type="REVERSAL")
+
+    engine.submit_order(ord1)
+    engine.submit_order(ord2)
+    engine.process_pending_orders(current_ts=2021.0, books=books)
+
+    assert pytest.approx(engine.get_open_exposure()) == 11.0
+
+    # Settle window with Up winning
+    settled = engine.settle_window_all("btc-updown-5m-2000", winner="Up", settle_ts=2300.0)
+    assert len(settled) == 2
+    assert engine.get_open_exposure() == 0.0
+
+    # Check PnLs: Down lost $1.00, Up won
+    down_pos = next(p for p in settled if p.side == "Down")
+    up_pos = next(p for p in settled if p.side == "Up")
+    assert down_pos.payout_usd == 0.0
+    assert down_pos.realized_pnl_usd < 0.0
+    assert up_pos.payout_usd > up_pos.total_cost_usd
+    assert up_pos.realized_pnl_usd > 0.0

@@ -160,10 +160,10 @@ class StrategyConfig:
 @dataclass
 class RiskConfig:
     daily_loss_limit_usd: float = 25.0
-    max_trades_per_day: int = 50
+    max_trades_per_day: int = 300
     pause_consecutive_losses: int = 3
     pause_duration_windows: int = 3
-    max_open_exposure_usd: float = 20.0
+    max_open_exposure_usd: float = 100.0
     kill_switch_file: str = "STOP"
     sizing_mode: str = "fixed"  # "fixed" or "fractional_kelly"
     kelly_fraction: float = 0.25
@@ -173,10 +173,10 @@ class RiskConfig:
     def from_env(cls) -> RiskConfig:
         return cls(
             daily_loss_limit_usd=_get_env_val("DAILY_LOSS_LIMIT_USD", 25.0, float),
-            max_trades_per_day=_get_env_val("MAX_TRADES_PER_DAY", 50, int),
+            max_trades_per_day=_get_env_val("MAX_TRADES_PER_DAY", 300, int),
             pause_consecutive_losses=_get_env_val("PAUSE_CONSECUTIVE_LOSSES", 3, int),
             pause_duration_windows=_get_env_val("PAUSE_DURATION_WINDOWS", 3, int),
-            max_open_exposure_usd=_get_env_val("MAX_OPEN_EXPOSURE_USD", 20.0, float),
+            max_open_exposure_usd=_get_env_val("MAX_OPEN_EXPOSURE_USD", 100.0, float),
             kill_switch_file=os.getenv("KILL_SWITCH_FILE", "STOP"),
             sizing_mode=os.getenv("SIZING_MODE", "fixed"),
             kelly_fraction=_get_env_val("KELLY_FRACTION", 0.25, float),
