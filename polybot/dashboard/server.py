@@ -27,7 +27,12 @@ log = logging.getLogger("polybot.dashboard.server")
 STATIC_DIR = Path(__file__).parent / "static"
 
 
-def create_dashboard_app(state: DashboardState, ledger: TradeLedger) -> Starlette:
+def create_dashboard_app(
+    state: DashboardState,
+    ledger: TradeLedger,
+    capital_mgr: Optional[Any] = None,
+    reconciler: Optional[Any] = None,
+) -> Starlette:
     """Builds Starlette application for the trading dashboard."""
 
     async def get_index(request: Request) -> Response:
@@ -61,6 +66,37 @@ def create_dashboard_app(state: DashboardState, ledger: TradeLedger) -> Starlett
             headers={"Content-Disposition": "attachment; filename=paper_trades.csv"},
         )
 
+    async def get_capital(request: Request) -> JSONResponse:
+        cap_dict = dict(state.capital_state)
+        if capital_mgr:
+            cap_dict.update(capital_mgr.state.to_dict())
+            init_b, rev_b = capital_mgr.get_trade_budgets()
+            cap_dict["current_initial_budget"] = init_b
+            cap_dict["current_reversal_budget"] = rev_b
+        return JSONResponse(cap_dict)
+
+    async def get_capital_transactions(request: Request) -> JSONResponse:
+        limit = int(request.query_params.get("limit", 100))
+        if capital_mgr and hasattr(capital_mgr, "ledger"):
+            txs = capital_mgr.ledger.get_recent_transactions(limit=limit)
+            return JSONResponse(txs)
+        return JSONResponse([])
+
+    async def get_capital_reconciliations(request: Request) -> JSONResponse:
+        limit = int(request.query_params.get("limit", 50))
+        if capital_mgr and hasattr(capital_mgr, "ledger"):
+            recons = capital_mgr.ledger.get_recent_reconciliations(limit=limit)
+            return JSONResponse(recons)
+        return JSONResponse([])
+
+    async def post_capital_reconcile(request: Request) -> JSONResponse:
+        if reconciler:
+            report = reconciler.reconcile()
+            if capital_mgr:
+                state.update_capital(capital_mgr.state.to_dict())
+            return JSONResponse({"status": "ok", "report": report.to_dict()})
+        return JSONResponse({"status": "ok", "message": "No standalone reconciler attached"})
+
     async def post_control(request: Request) -> JSONResponse:
         try:
             body = await request.json()
@@ -79,6 +115,10 @@ def create_dashboard_app(state: DashboardState, ledger: TradeLedger) -> Starlett
         Route("/api/performance", endpoint=get_performance, methods=["GET"]),
         Route("/api/trades", endpoint=get_trades, methods=["GET"]),
         Route("/api/trades/csv", endpoint=export_trades_csv, methods=["GET"]),
+        Route("/api/capital", endpoint=get_capital, methods=["GET"]),
+        Route("/api/capital/transactions", endpoint=get_capital_transactions, methods=["GET"]),
+        Route("/api/capital/reconciliations", endpoint=get_capital_reconciliations, methods=["GET"]),
+        Route("/api/capital/reconcile", endpoint=post_capital_reconcile, methods=["POST"]),
         Route("/api/control", endpoint=post_control, methods=["POST"]),
         Mount("/static", app=StaticFiles(directory=str(STATIC_DIR)), name="static"),
     ]
@@ -93,15 +133,19 @@ class DashboardServer:
         self,
         state: DashboardState,
         ledger: TradeLedger,
+        capital_mgr: Optional[Any] = None,
+        reconciler: Optional[Any] = None,
         host: str = "127.0.0.1",
         port: int = 8080,
     ):
         import threading
         self.state = state
         self.ledger = ledger
+        self.capital_mgr = capital_mgr
+        self.reconciler = reconciler
         self.host = host
         self.port = port
-        self.app = create_dashboard_app(state, ledger)
+        self.app = create_dashboard_app(state, ledger, capital_mgr=capital_mgr, reconciler=reconciler)
         self._server: Optional[uvicorn.Server] = None
         self._thread: Optional[threading.Thread] = None
 

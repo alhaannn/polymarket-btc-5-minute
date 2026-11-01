@@ -73,7 +73,7 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
     from polybot.feeds.health import FeedHealthTracker
     from polybot.feeds.rtds import RTDSFeed
     from polybot.gamma import PolymarketClient
-    from polybot.capital import CapitalManager, DynamicTradeBudgetCalculator
+    from polybot.capital import CapitalManager, DynamicTradeBudgetCalculator, CapitalReconciler
     from polybot.risk import RiskManager
     from polybot.session import MarketSessionManager
     from polybot.sizing import PositionSizer
@@ -116,13 +116,36 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
         dash_state.add_log("RESERVE", f"Option B Reserve Release on startup: +${released_usd:.2f} active funds released for {today}")
         log.info("Option B Reserve Release on startup: +$%.2f into active capital", released_usd)
 
-    dash_state.update_capital(capital_mgr.state.to_dict())
+    # Initialize Capital Reconciler & run startup reconciliation (Roadmap Phase 7)
+    reconciler = CapitalReconciler(capital_manager=capital_mgr, engine=engine)
+    recon_report = reconciler.reconcile(trading_day=today)
+    if not recon_report.is_valid:
+        dash_state.add_log("RECON_ERR", f"Reconciliation discrepancy on startup: {recon_report.message}")
+        log.error("Capital reconciliation discrepancy on startup: %s", recon_report.message)
+    else:
+        dash_state.add_log("RECON", f"Startup capital reconciliation verified: Total Equity=${capital_mgr.state.total_equity:.2f}")
+        log.info("Startup capital reconciliation verified: Total Equity=$%.2f", capital_mgr.state.total_equity)
+
+    # Populate enriched initial capital state in dashboard
+    init_b, rev_b = capital_mgr.get_trade_budgets(today)
+    dash_cap = capital_mgr.state.to_dict()
+    dash_cap.update({
+        "current_initial_budget": init_b,
+        "current_reversal_budget": rev_b,
+        "spendable_active_funds": capital_mgr.state.active_capital,
+        "active_funds_reserved": 0.0,
+        "protected_funds": capital_mgr.state.protected_capital,
+        "unsettled_funds": 0.0,
+    })
+    dash_state.update_capital(dash_cap)
 
     dash_server = None
     if config.dashboard.enabled:
         dash_server = DashboardServer(
             dash_state,
             ledger,
+            capital_mgr=capital_mgr,
+            reconciler=reconciler,
             host=config.dashboard.host,
             port=config.dashboard.port,
         )
@@ -398,7 +421,7 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
                     if not b_val.allowed:
                         if hasattr(strat, "on_order_rejected"):
                             strat.on_order_rejected(sig.signal_type)
-                        log.warning("Order budget rejected: %s", b_val.reason)
+                        log.warning("[ORDER_BUDGET_REJECTED] %s: %s", sig.signal_type, b_val.reason)
                         dash_state.add_log("WARNING", f"Budget rejected: {b_val.reason}")
                         continue
 
@@ -475,6 +498,8 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
                                 trading_day=time.strftime("%Y-%m-%d"),
                                 signal_type=settled_pos.signal_type,
                             )
+                            log.info("[SETTLEMENT_PROCESSED] settle_id=%s net_pnl=$%+.2f fee=$%.2f",
+                                     settle_id, settled_pos.realized_pnl_usd, settled_pos.total_fees_usd)
                         except Exception as e:
                             log.error("Failed to process capital settlement for %s: %s", settle_id, e)
 
@@ -484,7 +509,19 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
                             if cancelled_cnt > 0:
                                 log.info("Cancelled %d unfilled pending orders due to daily shutdown", cancelled_cnt)
 
-                        dash_state.update_capital(capital_mgr.state.to_dict())
+                        open_exp = engine.get_open_exposure()
+                        init_b, rev_b = capital_mgr.get_trade_budgets(time.strftime("%Y-%m-%d"))
+                        dash_cap = capital_mgr.state.to_dict()
+                        dash_cap.update({
+                            "current_initial_budget": init_b,
+                            "current_reversal_budget": rev_b,
+                            "open_exposure": round(open_exp, 2),
+                            "spendable_active_funds": max(0.0, round(capital_mgr.state.active_capital - open_exp, 2)),
+                            "active_funds_reserved": round(open_exp, 2),
+                            "protected_funds": capital_mgr.state.protected_capital,
+                            "unsettled_funds": round(open_exp, 2),
+                        })
+                        dash_state.update_capital(dash_cap)
                         dash_state.add_log(
                             "SETTLED",
                             f"Settled {slug}: position={settled_pos.side} ({settled_pos.signal_type}) winner={winner} | "
@@ -527,11 +564,22 @@ async def run_dashboard(config: PolybotConfig) -> None:
     from polybot.dashboard.server import DashboardServer
     from polybot.dashboard.state import DashboardState
     from polybot.execution.ledger import TradeLedger
+    from polybot.capital import CapitalManager, CapitalReconciler
 
     ledger = TradeLedger(config.recorder.data_dir / "paper_ledger.db")
+    capital_mgr = CapitalManager(db_path=config.recorder.data_dir / "paper_ledger.db", starting_equity_usd=11.0)
+    reconciler = CapitalReconciler(capital_manager=capital_mgr)
     state = DashboardState()
     state.set_bot_status("STANDALONE_VIEW")
-    server = DashboardServer(state, ledger, host=config.dashboard.host, port=config.dashboard.port)
+    state.update_capital(capital_mgr.state.to_dict())
+    server = DashboardServer(
+        state,
+        ledger,
+        capital_mgr=capital_mgr,
+        reconciler=reconciler,
+        host=config.dashboard.host,
+        port=config.dashboard.port
+    )
     await server.start()
     log.info("Dashboard active at http://%s:%d. Press Ctrl+C to exit.", config.dashboard.host, config.dashboard.port)
     try:

@@ -22,15 +22,19 @@ function updateClockLocal() {
 
 function initPolling() {
   fetchState();
+  fetchCapital();
   fetchPerformance();
   fetchTrades();
+  fetchCapitalTransactions();
 
   // Rapid refresh cycle for smooth market timer & probability gauges (500ms)
   setInterval(fetchState, 500);
-  // Metrics & trades poll every 2.0s
+  // Metrics, capital & trades poll every 2.0s
   setInterval(() => {
+    fetchCapital();
     fetchPerformance();
     fetchTrades();
+    fetchCapitalTransactions();
   }, 2000);
 }
 
@@ -264,6 +268,11 @@ function renderState(state) {
   if (state.logs && state.logs.length > 0) {
     renderLogs(state.logs);
   }
+
+  // 7. Capital state rendering
+  if (state.capital) {
+    renderCapital(state.capital);
+  }
 }
 
 function renderLogs(logs) {
@@ -431,4 +440,207 @@ function exportTradesCSV() {
 function escapeHtml(str) {
   if (!str) return '';
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+async function fetchCapital() {
+  try {
+    const res = await fetch('/api/capital');
+    if (!res.ok) throw new Error('Capital fetch failed');
+    const data = await res.json();
+    renderCapital(data);
+  } catch (err) {
+    console.debug('Capital poll error:', err);
+  }
+}
+
+function renderCapital(cap) {
+  if (!cap) return;
+
+  const totalEl = document.getElementById('val-cap-total');
+  if (totalEl) totalEl.textContent = `$${(cap.total_equity || 0).toFixed(2)}`;
+
+  const activeEl = document.getElementById('val-cap-active');
+  const activeSubEl = document.getElementById('val-cap-active-sub');
+  if (activeEl) {
+    const spendable = cap.spendable_active_funds !== undefined ? cap.spendable_active_funds : (cap.active_capital || 0);
+    activeEl.textContent = `$${spendable.toFixed(2)}`;
+    if (activeSubEl) {
+      const reserved = cap.active_funds_reserved !== undefined ? cap.active_funds_reserved : (cap.open_exposure || 0);
+      activeSubEl.textContent = `Reserved: $${reserved.toFixed(2)} | Total Active: $${(cap.active_capital || 0).toFixed(2)}`;
+    }
+  }
+
+  const protEl = document.getElementById('val-cap-protected');
+  const protSubEl = document.getElementById('val-cap-protected-sub');
+  if (protEl) {
+    protEl.textContent = `$${(cap.protected_capital || 0).toFixed(2)}`;
+    if (protSubEl) {
+      protSubEl.textContent = cap.milestone_44_activated
+        ? 'Active 50/50 reserve compounding'
+        : 'Accumulates after $44 milestone';
+    }
+  }
+
+  const optBEl = document.getElementById('val-cap-option-b');
+  const optBSubEl = document.getElementById('val-cap-option-b-sub');
+  if (optBEl) {
+    if (cap.next_day_activation_eligible) {
+      optBEl.textContent = 'ELIGIBLE';
+      optBEl.className = 'metric-large text-green';
+      if (optBSubEl) optBSubEl.textContent = '50% protected release queued for tomorrow';
+    } else if (cap.last_activation_trading_day) {
+      optBEl.textContent = 'RELEASED';
+      optBEl.className = 'metric-large';
+      if (optBSubEl) optBSubEl.textContent = `Last activated for day: ${cap.last_activation_trading_day}`;
+    } else {
+      optBEl.textContent = 'INACTIVE';
+      optBEl.className = 'metric-large';
+      if (optBSubEl) optBSubEl.textContent = 'Triggers after qualifying shutdown';
+    }
+  }
+
+  const msPill = document.getElementById('pill-cap-ms44');
+  if (msPill) {
+    if (cap.milestone_44_activated) {
+      msPill.className = 'status-pill status-running';
+      msPill.textContent = 'MILESTONE $44: ACTIVATED';
+    } else {
+      msPill.className = 'status-pill mode-paper';
+      msPill.textContent = 'MILESTONE $44: PENDING';
+    }
+  }
+
+  const reconPill = document.getElementById('pill-cap-recon');
+  if (reconPill) {
+    if (cap.reconciliation_blocked || cap.reconciliation_status === 'MISMATCH') {
+      reconPill.className = 'status-pill status-stopped';
+      reconPill.textContent = 'RECONCILIATION: MISMATCH';
+    } else {
+      reconPill.className = 'status-pill status-running';
+      reconPill.textContent = 'RECONCILIATION: OK';
+    }
+  }
+
+  const budgetsEl = document.getElementById('val-cap-budgets');
+  if (budgetsEl) {
+    budgetsEl.textContent = `$${cap.current_initial_budget || 1} Initial / $${cap.current_reversal_budget || 10} Reversal`;
+  }
+
+  const shutdownEl = document.getElementById('val-cap-shutdown-status');
+  if (shutdownEl) {
+    if (cap.daily_shutdown_status) {
+      shutdownEl.textContent = `SHUTDOWN ACTIVE (${cap.daily_shutdown_reason || 'Conjunctive failure'})`;
+      shutdownEl.style.color = 'var(--color-red)';
+    } else {
+      shutdownEl.textContent = `CLEAR (Init: ${cap.daily_failed_initial_count || 0}/1, Rev: ${cap.daily_failed_reversal_count || 0}/1)`;
+      shutdownEl.style.color = 'var(--text-primary)';
+    }
+  }
+
+  const shortfallEl = document.getElementById('val-cap-shortfall');
+  if (shortfallEl) {
+    const sf = cap.active_shortfall || 0;
+    if (sf > 0) {
+      shortfallEl.textContent = `$${sf.toFixed(2)} (DEFICIT)`;
+      shortfallEl.style.color = 'var(--color-red)';
+    } else {
+      shortfallEl.textContent = '$0.00 (Healthy)';
+      shortfallEl.style.color = 'var(--color-green)';
+    }
+  }
+
+  const lastAuditEl = document.getElementById('val-cap-last-audit');
+  if (lastAuditEl && cap.last_reconciliation_ts > 0) {
+    lastAuditEl.textContent = new Date(cap.last_reconciliation_ts * 1000).toTimeString().split(' ')[0];
+  }
+}
+
+async function fetchCapitalTransactions() {
+  try {
+    const res = await fetch('/api/capital/transactions?limit=50');
+    if (!res.ok) throw new Error('Capital transactions fetch failed');
+    const txs = await res.json();
+    renderCapitalTransactions(txs);
+  } catch (err) {
+    console.debug('Capital tx poll error:', err);
+  }
+}
+
+function renderCapitalTransactions(txs) {
+  const tbody = document.getElementById('tbody-capital-transactions');
+  if (!tbody) return;
+
+  if (!txs || txs.length === 0) {
+    tbody.innerHTML = `
+      <tr class="table-row-empty">
+        <td colspan="9">No capital transactions recorded yet in ledger.</td>
+      </tr>
+    `;
+    return;
+  }
+
+  const rowsHtml = txs.map(t => {
+    const amtUsd = (t.amount_cents / 100.0).toFixed(2);
+    const actBefore = (t.active_before_cents / 100.0).toFixed(2);
+    const actAfter = (t.active_after_cents / 100.0).toFixed(2);
+    const protBefore = (t.protected_before_cents / 100.0).toFixed(2);
+    const protAfter = (t.protected_after_cents / 100.0).toFixed(2);
+    const totAfter = (t.total_after_cents / 100.0).toFixed(2);
+
+    let tagClass = 'badge-tag-initial';
+    if (t.event_type.includes('MILESTONE')) tagClass = 'status-pill status-running';
+    else if (t.event_type.includes('RESERVE')) tagClass = 'status-pill mode-paper';
+    else if (t.event_type.includes('LOSS')) tagClass = 'status-pill status-stopped';
+    else if (t.event_type.includes('PROFIT')) tagClass = 'status-pill status-running';
+
+    const timeStr = t.created_at_ts ? new Date(t.created_at_ts * 1000).toTimeString().split(' ')[0] : '--';
+
+    return `
+      <tr>
+        <td><code>${t.tx_id}</code></td>
+        <td><span class="${tagClass}">${t.event_type}</span></td>
+        <td><strong>$${amtUsd}</strong></td>
+        <td>$${actBefore} &rarr; <strong>$${actAfter}</strong></td>
+        <td>$${protBefore} &rarr; <strong>$${protAfter}</strong></td>
+        <td><strong>$${totAfter}</strong></td>
+        <td><code>${t.trading_day || '--'}</code></td>
+        <td>${timeStr}</td>
+        <td>${escapeHtml(t.reason)}</td>
+      </tr>
+    `;
+  }).join('');
+
+  tbody.innerHTML = rowsHtml;
+}
+
+function switchArchiveTab(tabName) {
+  const ordersTab = document.getElementById('tab-orders');
+  const capTxTab = document.getElementById('tab-capital-tx');
+  const ordersView = document.getElementById('view-orders-table');
+  const capView = document.getElementById('view-capital-table');
+
+  if (tabName === 'orders') {
+    if (ordersTab) ordersTab.classList.add('active');
+    if (capTxTab) capTxTab.classList.remove('active');
+    if (ordersView) ordersView.style.display = 'block';
+    if (capView) capView.style.display = 'none';
+  } else {
+    if (ordersTab) ordersTab.classList.remove('active');
+    if (capTxTab) capTxTab.classList.add('active');
+    if (ordersView) ordersView.style.display = 'none';
+    if (capView) capView.style.display = 'block';
+    fetchCapitalTransactions();
+  }
+}
+
+async function triggerReconcile() {
+  try {
+    const res = await fetch('/api/capital/reconcile', { method: 'POST' });
+    const result = await res.json();
+    console.log('Reconciliation result:', result);
+    fetchCapital();
+    fetchCapitalTransactions();
+  } catch (err) {
+    alert('Failed to trigger reconciliation: ' + err.message);
+  }
 }

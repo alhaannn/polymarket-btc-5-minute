@@ -9,6 +9,11 @@ from polybot.capital.sizing import (
     BudgetValidationResult,
     round_half_up_to_whole_dollar,
 )
+from polybot.capital.reconciliation import (
+    CapitalReconciler,
+    ExchangeBalanceSnapshot,
+    ReconciliationReport,
+)
 
 __all__ = [
     "CapitalState",
@@ -19,4 +24,7 @@ __all__ = [
     "DynamicTradeBudgetCalculator",
     "BudgetValidationResult",
     "round_half_up_to_whole_dollar",
+    "CapitalReconciler",
+    "ExchangeBalanceSnapshot",
+    "ReconciliationReport",
 ]

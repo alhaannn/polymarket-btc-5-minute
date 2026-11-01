@@ -48,11 +48,23 @@ class DashboardState:
         # Recent events/logs
         self.logs: Deque[Dict[str, Any]] = collections.deque(maxlen=100)
 
-        # Capital State & Compounding
+        # Capital State & Compounding (Roadmap Phase 7 Section B)
         self.capital_state: Dict[str, Any] = {
             "total_equity": 11.0,
             "active_capital": 11.0,
             "protected_capital": 0.0,
+            "spendable_active_funds": 11.0,
+            "active_funds_reserved": 0.0,
+            "protected_funds": 0.0,
+            "unsettled_funds": 0.0,
+            "current_initial_budget": 1.0,
+            "current_reversal_budget": 10.0,
+            "realized_net_pnl": 0.0,
+            "realized_profit": 0.0,
+            "realized_loss": 0.0,
+            "fees": 0.0,
+            "open_exposure": 0.0,
+            "reserved_collateral": 0.0,
             "active_shortfall": 0.0,
             "milestone_44_activated": False,
             "daily_shutdown_status": False,
@@ -60,6 +72,14 @@ class DashboardState:
             "daily_shutdown_trading_day": "",
             "daily_failed_initial_count": 0,
             "daily_failed_reversal_count": 0,
+            "next_day_activation_eligible": False,
+            "last_activated_shutdown_event_id": None,
+            "last_activation_trading_day": None,
+            "last_reserve_activation": None,
+            "reconciliation_status": "OK",
+            "last_reconciliation_ts": 0.0,
+            "last_reconciliation_diff": 0.0,
+            "reconciliation_blocked": False,
         }
 
         # Control signals requested from UI

@@ -806,3 +806,29 @@ body {
   color: var(--color-green);
   font-weight: 600;
 }
+
+/* --------------------------------------------------------------------------
+   Capital Management & Compounding Card Styles (Roadmap Phase 7)
+   -------------------------------------------------------------------------- */
+.capital-card {
+  border-top: 3px solid var(--color-blue);
+}
+
+.capital-details-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  background: var(--bg-subtle);
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-light);
+  font-size: 11px;
+}
+
+.badge-capital-tx {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}

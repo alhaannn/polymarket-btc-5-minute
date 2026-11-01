@@ -57,6 +57,10 @@ class CapitalLedger:
                     last_activated_shutdown_event_id TEXT,
                     last_activation_trading_day TEXT,
                     last_processed_settlement_id TEXT,
+                    last_reconciliation_ts REAL NOT NULL DEFAULT 0.0,
+                    last_reconciliation_status TEXT NOT NULL DEFAULT 'OK',
+                    last_reconciliation_diff_cents INTEGER NOT NULL DEFAULT 0,
+                    reconciliation_blocked INTEGER NOT NULL DEFAULT 0,
                     capital_ledger_version INTEGER NOT NULL DEFAULT 1,
                     updated_at_ts REAL NOT NULL
                 )
@@ -72,6 +76,14 @@ class CapitalLedger:
                 conn.execute("ALTER TABLE capital_state ADD COLUMN daily_failed_reversal_count INTEGER NOT NULL DEFAULT 0")
             if "daily_failure_trading_day" not in cols:
                 conn.execute("ALTER TABLE capital_state ADD COLUMN daily_failure_trading_day TEXT NOT NULL DEFAULT ''")
+            if "last_reconciliation_ts" not in cols:
+                conn.execute("ALTER TABLE capital_state ADD COLUMN last_reconciliation_ts REAL NOT NULL DEFAULT 0.0")
+            if "last_reconciliation_status" not in cols:
+                conn.execute("ALTER TABLE capital_state ADD COLUMN last_reconciliation_status TEXT NOT NULL DEFAULT 'OK'")
+            if "last_reconciliation_diff_cents" not in cols:
+                conn.execute("ALTER TABLE capital_state ADD COLUMN last_reconciliation_diff_cents INTEGER NOT NULL DEFAULT 0")
+            if "reconciliation_blocked" not in cols:
+                conn.execute("ALTER TABLE capital_state ADD COLUMN reconciliation_blocked INTEGER NOT NULL DEFAULT 0")
 
             # 2. Immutable transaction history table
             conn.execute("""
@@ -118,6 +130,23 @@ class CapitalLedger:
                     created_at_ts REAL NOT NULL
                 )
             """)
+
+            # 5. Reconciliation audit table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS capital_reconciliations (
+                    recon_id TEXT PRIMARY KEY,
+                    expected_equity_cents INTEGER NOT NULL,
+                    external_equity_cents INTEGER NOT NULL,
+                    locked_collateral_cents INTEGER NOT NULL,
+                    spendable_active_cents INTEGER NOT NULL,
+                    discrepancy_cents INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    trading_day TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    created_at_ts REAL NOT NULL
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_cap_recon_day ON capital_reconciliations(trading_day)")
             conn.commit()
 
     def get_state(self) -> Optional[CapitalState]:
@@ -145,6 +174,10 @@ class CapitalLedger:
                 last_activated_shutdown_event_id=row["last_activated_shutdown_event_id"],
                 last_activation_trading_day=row["last_activation_trading_day"],
                 last_processed_settlement_id=row["last_processed_settlement_id"],
+                last_reconciliation_ts=row["last_reconciliation_ts"] if "last_reconciliation_ts" in row_keys else 0.0,
+                last_reconciliation_status=row["last_reconciliation_status"] if "last_reconciliation_status" in row_keys else "OK",
+                last_reconciliation_diff_cents=row["last_reconciliation_diff_cents"] if "last_reconciliation_diff_cents" in row_keys else 0,
+                reconciliation_blocked=bool(row["reconciliation_blocked"]) if "reconciliation_blocked" in row_keys else False,
                 capital_ledger_version=row["capital_ledger_version"],
                 updated_at_ts=row["updated_at_ts"],
             )
@@ -173,9 +206,11 @@ class CapitalLedger:
                     daily_failed_reversal_count, daily_failure_trading_day,
                     next_day_activation_eligible, last_activated_shutdown_event_id,
                     last_activation_trading_day, last_processed_settlement_id,
+                    last_reconciliation_ts, last_reconciliation_status,
+                    last_reconciliation_diff_cents, reconciliation_blocked,
                     capital_ledger_version, updated_at_ts
                 ) VALUES (
-                    1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 )
             """, (
                 state.total_equity_cents,
@@ -195,6 +230,10 @@ class CapitalLedger:
                 state.last_activated_shutdown_event_id,
                 state.last_activation_trading_day,
                 state.last_processed_settlement_id,
+                state.last_reconciliation_ts,
+                state.last_reconciliation_status,
+                state.last_reconciliation_diff_cents,
+                1 if state.reconciliation_blocked else 0,
                 state.capital_ledger_version,
                 state.updated_at_ts,
             ))
@@ -311,3 +350,59 @@ class CapitalLedger:
             return False, external_balance_cents
         diff = external_balance_cents - state.total_equity_cents
         return (diff == 0), diff
+
+    def record_reconciliation(self, recon_data: Dict[str, Any]) -> None:
+        """Persists a reconciliation audit record and updates capital_state reconciliation metadata."""
+        now = time.time()
+        with self._get_connection() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO capital_reconciliations (
+                    recon_id, expected_equity_cents, external_equity_cents,
+                    locked_collateral_cents, spendable_active_cents, discrepancy_cents,
+                    status, trading_day, message, created_at_ts
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                recon_data["recon_id"],
+                recon_data["expected_equity_cents"],
+                recon_data["external_equity_cents"],
+                recon_data.get("locked_collateral_cents", 0),
+                recon_data.get("spendable_active_cents", 0),
+                recon_data["discrepancy_cents"],
+                recon_data["status"],
+                recon_data["trading_day"],
+                recon_data["message"],
+                recon_data.get("created_at_ts", now),
+            ))
+            # Also update the singleton state's reconciliation fields
+            conn.execute("""
+                UPDATE capital_state SET
+                    last_reconciliation_ts = ?,
+                    last_reconciliation_status = ?,
+                    last_reconciliation_diff_cents = ?,
+                    reconciliation_blocked = ?
+                WHERE id = 1
+            """, (
+                recon_data.get("created_at_ts", now),
+                recon_data["status"],
+                recon_data["discrepancy_cents"],
+                1 if recon_data.get("is_valid") is False else 0,
+            ))
+            conn.commit()
+
+    def get_recent_reconciliations(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Returns recent reconciliation history for audit and dashboard monitoring."""
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM capital_reconciliations ORDER BY created_at_ts DESC LIMIT ?",
+                (limit,)
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_last_reconciliation(self) -> Optional[Dict[str, Any]]:
+        """Returns the most recent reconciliation record if one exists."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM capital_reconciliations ORDER BY created_at_ts DESC LIMIT 1"
+            ).fetchone()
+            return dict(row) if row else None
+

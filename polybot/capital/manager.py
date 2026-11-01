@@ -83,8 +83,8 @@ class CapitalManager:
             idempotency_key="initial-capital-deposit",
         )
         self.ledger.save_state_and_transaction(self.state, tx)
-        log.info("Initialized starting capital: Active=$%.2f, Protected=$0.00, Total=$%.2f",
-                 self.state.active_capital, self.state.total_equity)
+        log.info("[CAPITAL_INITIALIZED] tx_id=%s Initialized starting capital: Active=$%.2f, Protected=$0.00, Total=$%.2f",
+                 tx.tx_id, self.state.active_capital, self.state.total_equity)
 
     def check_day_rollover(self, current_trading_day: Optional[str] = None) -> None:
         """
@@ -116,6 +116,24 @@ class CapitalManager:
             self.state.daily_shutdown_status
             and self.state.daily_shutdown_trading_day == today
         )
+
+    def is_trading_blocked(self, current_trading_day: Optional[str] = None) -> Tuple[bool, str]:
+        """
+        Returns whether new trading is currently blocked due to:
+        - Daily shutdown active
+        - Reconciliation mismatch detected
+        - Active shortfall present
+        - Depleted active capital
+        """
+        if self.is_daily_shutdown_active(current_trading_day):
+            return True, f"Daily shutdown active: {self.state.daily_shutdown_reason}"
+        if self.state.reconciliation_blocked:
+            return True, f"Reconciliation discrepancy active (diff: ${self.state.last_reconciliation_diff_cents/100:.2f})"
+        if self.state.active_shortfall_cents > 0:
+            return True, f"Active shortfall present: ${self.state.active_shortfall:.2f}"
+        if self.state.active_capital_cents <= 0:
+            return True, "Active capital is depleted ($0.00)"
+        return False, ""
 
     def verify_invariants(self) -> Tuple[bool, List[str]]:
         """
@@ -152,27 +170,23 @@ class CapitalManager:
         Calculates whole-dollar order budgets based on current active capital:
         - Initial budget = round(Active / 11)
         - Reversal budget = round((Active * 10) / 11)
-        If an active shortfall exists or daily shutdown is active, returns 0, 0 (trading halted).
+        If an active shortfall exists, daily shutdown is active, or reconciliation discrepancy
+        is detected, returns 0, 0 (trading halted).
         """
-        if self.is_daily_shutdown_active(current_trading_day):
-            log.warning("Daily shutdown active for %s. New trade budgets set to $0.",
-                        self.state.daily_shutdown_trading_day)
-            return 0, 0
-
-        if self.state.active_shortfall_cents > 0:
-            log.warning("Active shortfall exists ($%.2f). New trade budgets set to $0.", self.state.active_shortfall)
+        blocked, reason = self.is_trading_blocked(current_trading_day)
+        if blocked:
+            log.warning("Trade budgets set to $0: %s", reason)
             return 0, 0
 
         active_usd = self.state.active_capital
-        if active_usd <= 0.0:
-            return 0, 0
-
         initial_raw = active_usd / 11.0
         reversal_raw = (active_usd * 10.0) / 11.0
 
         initial_budget = round_half_up_to_whole_dollar(initial_raw)
         reversal_budget = round_half_up_to_whole_dollar(reversal_raw)
 
+        log.debug("[TRADE_BUDGET_CALCULATED] Initial=$%d, Reversal=$%d (Active=$%.2f)",
+                  initial_budget, reversal_budget, active_usd)
         return initial_budget, reversal_budget
 
     def process_settlement(
@@ -284,8 +298,8 @@ class CapitalManager:
                         idempotency_key=f"milestone-44-{settlement_id}",
                     )
                     tx_list.append(tx_milestone)
-                    log.info("🎉 $44 MILESTONE ACTIVATED! Active=$%.2f, Protected=$%.2f, Total=$%.2f",
-                             self.state.active_capital, self.state.protected_capital, self.state.total_equity)
+                    log.info("[MILESTONE_44_ACTIVATED] tx_id=%s 🎉 $44 MILESTONE ACTIVATED! Active=$%.2f, Protected=$%.2f, Total=$%.2f",
+                             tx_milestone.tx_id, self.state.active_capital, self.state.protected_capital, self.state.total_equity)
 
             else:
                 # Pre-milestone loss
@@ -378,6 +392,8 @@ class CapitalManager:
                     idempotency_key=f"settle-{settlement_id}",
                 )
                 tx_list.append(tx_profit)
+                log.info("[PROFIT_ALLOCATED] tx_id=%s Settlement=%s Profit=+$%.2f | Active=$%.2f, Protected=$%.2f, Total=$%.2f",
+                         tx_profit.tx_id, settlement_id, net_pnl_usd, self.state.active_capital, self.state.protected_capital, self.state.total_equity)
 
             else:
                 # Realized losses deduct from active capital ONLY
@@ -416,6 +432,8 @@ class CapitalManager:
                     idempotency_key=f"settle-{settlement_id}",
                 )
                 tx_list.append(tx_loss)
+                log.info("[LOSS_DEDUCTED] tx_id=%s Settlement=%s Loss=-$%.2f | Active=$%.2f, Protected=$%.2f, Total=$%.2f",
+                         tx_loss.tx_id, settlement_id, abs(net_pnl_usd), self.state.active_capital, self.state.protected_capital, self.state.total_equity)
 
         # Daily Failure Tracking & Conjunctive Shutdown Trigger (Roadmap Phase 5)
         if net_pnl_cents < 0 and signal_type:
@@ -500,7 +518,8 @@ class CapitalManager:
             idempotency_key=f"shutdown-event-{trading_day}",
         )
         self.ledger.save_state_and_transaction(self.state, tx, shutdown_event=shutdown_record)
-        log.warning("DAILY SHUTDOWN RECORDED for %s: %s (Eligible for next-day reserve release)", trading_day, reason)
+        log.warning("[DAILY_SHUTDOWN_TRIGGERED] event_id=%s for %s: %s", event_id, trading_day, reason)
+        log.info("[NEXT_DAY_ACTIVATION_ELIGIBLE] event_id=%s Marked eligible for Option B reserve activation", event_id)
         return event_id
 
     def check_and_activate_next_day_reserve(
@@ -574,7 +593,7 @@ class CapitalManager:
         self.verify_invariants()
 
         released_usd = round(released_cents / 100.0, 2)
-        log.info("RESERVE RELEASE OPTION B EXECUTED: Released $%.2f. New Active=$%.2f, Remaining Protected=$%.2f",
-                 released_usd, self.state.active_capital, self.state.protected_capital)
+        log.info("[PROTECTED_CAPITAL_RELEASED] tx_id=%s Option B: Released $%.2f. New Active=$%.2f, Remaining Protected=$%.2f",
+                 tx.tx_id, released_usd, self.state.active_capital, self.state.protected_capital)
 
         return True, released_usd, f"Released ${released_usd:.2f} protected capital into active"

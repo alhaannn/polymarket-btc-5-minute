@@ -171,7 +171,64 @@
       </div>
     </section>
 
-    <!-- Row 3: Performance Accounting & P&L Cards -->
+    <!-- Row 3: Capital Architecture, Protection & Compounding Engine (Roadmap Phase 7) -->
+    <section class="card capital-card" id="card-capital">
+      <div class="card-header">
+        <div class="header-left">
+          <span class="card-tag">CAPITAL & PROTECTION</span>
+          <h2 class="card-title">Dynamic Capital Architecture & Reserve Compounding</h2>
+        </div>
+        <div class="header-right" style="display: flex; gap: 8px; align-items: center;">
+          <span class="status-pill mode-paper" id="pill-cap-ms44">MILESTONE $44: PENDING</span>
+          <span class="status-pill status-running" id="pill-cap-recon">RECONCILIATION: OK</span>
+          <button class="btn btn-sm btn-outline" id="btn-trigger-reconcile" onclick="triggerReconcile()">Audit Now</button>
+        </div>
+      </div>
+
+      <div class="metrics-summary-grid" style="grid-template-columns: repeat(4, 1fr); margin-bottom: 12px;">
+        <div class="metric-card pnl-card">
+          <div class="metric-label">Total Equity Snapshot</div>
+          <div class="metric-large" id="val-cap-total">$11.00</div>
+          <div class="metric-sublabel" id="val-cap-total-sub">Canonical Base: $11.00</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Spendable Active Funds</div>
+          <div class="metric-large text-green" id="val-cap-active">$11.00</div>
+          <div class="metric-sublabel" id="val-cap-active-sub">Reserved Exposure: $0.00</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Protected Reserve Capital</div>
+          <div class="metric-large" id="val-cap-protected">$0.00</div>
+          <div class="metric-sublabel" id="val-cap-protected-sub">Isolated from trading losses</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Option B Reserve Status</div>
+          <div class="metric-large" id="val-cap-option-b" style="font-size: 16px; padding-top: 4px;">INACTIVE</div>
+          <div class="metric-sublabel" id="val-cap-option-b-sub">50% release on next-day rollover</div>
+        </div>
+      </div>
+
+      <div class="capital-details-bar" style="display: flex; gap: 16px; background: var(--bg-subtle); padding: 10px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border-light); font-size: 11px;">
+        <div style="flex: 1;">
+          <span style="color: var(--text-muted); font-weight: 600;">DERIVED BUDGETS:</span>
+          <span id="val-cap-budgets" style="font-family: var(--font-mono); font-weight: 600; color: var(--text-primary); margin-left: 6px;">$1 Initial / $10 Reversal</span>
+        </div>
+        <div style="flex: 1;">
+          <span style="color: var(--text-muted); font-weight: 600;">CONJUNCTIVE SHUTDOWN:</span>
+          <span id="val-cap-shutdown-status" style="font-family: var(--font-mono); font-weight: 600; color: var(--text-primary); margin-left: 6px;">CLEAR (Init: 0/1, Rev: 0/1)</span>
+        </div>
+        <div style="flex: 1;">
+          <span style="color: var(--text-muted); font-weight: 600;">ACTIVE SHORTFALL:</span>
+          <span id="val-cap-shortfall" style="font-family: var(--font-mono); font-weight: 600; color: var(--text-primary); margin-left: 6px;">$0.00 (Healthy)</span>
+        </div>
+        <div style="flex: 1;">
+          <span style="color: var(--text-muted); font-weight: 600;">LAST AUDIT:</span>
+          <span id="val-cap-last-audit" style="font-family: var(--font-mono); font-weight: 600; color: var(--text-primary); margin-left: 6px;">--</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Row 4: Performance Accounting & P&L Cards -->
     <section class="card performance-card" id="card-performance">
       <div class="card-header">
         <div class="header-left">
@@ -233,17 +290,22 @@
       </div>
     </section>
 
-    <!-- Row 5: Detailed Auditable Trade Ledger Table -->
+    <!-- Row 6: Detailed Auditable Trade & Capital Ledger Archive -->
     <section class="card trade-history-card" id="card-trades">
       <div class="card-header">
         <div class="header-left">
-          <span class="card-tag">TRADE ARCHIVE</span>
-          <h2 class="card-title">Simulated Orders & Position Ledger</h2>
+          <span class="card-tag">AUDIT ARCHIVE</span>
+          <h2 class="card-title">Execution & Capital Ledger History</h2>
+        </div>
+        <div class="time-tabs" id="archive-tabs" style="margin-right: 12px;">
+          <button class="tab-btn active" data-tab="orders" id="tab-orders" onclick="switchArchiveTab('orders')">Simulated Orders</button>
+          <button class="tab-btn" data-tab="capital-tx" id="tab-capital-tx" onclick="switchArchiveTab('capital-tx')">Capital Transactions</button>
         </div>
         <button class="btn btn-sm btn-outline" id="btn-export-csv" onclick="exportTradesCSV()">Export CSV</button>
       </div>
 
-      <div class="table-responsive">
+      <!-- Tab 1: Orders Table -->
+      <div class="table-responsive" id="view-orders-table">
         <table class="trades-table" id="table-trades">
           <thead>
             <tr>
@@ -265,6 +327,30 @@
           <tbody id="tbody-trades">
             <tr class="table-row-empty">
               <td colspan="13">No paper trades recorded yet in this session.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Tab 2: Capital Ledger Transactions Audit Table -->
+      <div class="table-responsive" id="view-capital-table" style="display: none;">
+        <table class="trades-table" id="table-capital-transactions">
+          <thead>
+            <tr>
+              <th>Transaction ID</th>
+              <th>Event Type</th>
+              <th>Amount ($)</th>
+              <th>Active Capital</th>
+              <th>Protected Capital</th>
+              <th>Total Equity</th>
+              <th>Day</th>
+              <th>Timestamp</th>
+              <th>Audit Reason / Context</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-capital-transactions">
+            <tr class="table-row-empty">
+              <td colspan="9">No capital transactions recorded yet in ledger.</td>
             </tr>
           </tbody>
         </table>

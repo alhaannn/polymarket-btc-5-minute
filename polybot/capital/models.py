@@ -49,6 +49,10 @@ class CapitalState:
     last_activated_shutdown_event_id: Optional[str] = None
     last_activation_trading_day: Optional[str] = None
     last_processed_settlement_id: Optional[str] = None
+    last_reconciliation_ts: float = 0.0
+    last_reconciliation_status: str = "OK"
+    last_reconciliation_diff_cents: int = 0
+    reconciliation_blocked: bool = False
     capital_ledger_version: int = 1
     updated_at_ts: float = 0.0
 
@@ -99,6 +103,10 @@ class CapitalState:
             "last_activated_shutdown_event_id": self.last_activated_shutdown_event_id,
             "last_activation_trading_day": self.last_activation_trading_day,
             "last_processed_settlement_id": self.last_processed_settlement_id,
+            "last_reconciliation_ts": self.last_reconciliation_ts,
+            "last_reconciliation_status": self.last_reconciliation_status,
+            "last_reconciliation_diff_cents": self.last_reconciliation_diff_cents,
+            "reconciliation_blocked": self.reconciliation_blocked,
             "capital_ledger_version": self.capital_ledger_version,
             "updated_at_ts": self.updated_at_ts,
         }
