@@ -358,6 +358,8 @@ class ReversalStrategy(BaseStrategy):
         self.reversal_order_placed: bool = False
         self.dynamic_initial_usd: Optional[float] = None
         self.dynamic_reversal_usd: Optional[float] = None
+        self.rejection_cooldown_until: Dict[str, float] = {}
+        self.last_tick_ts: float = 0.0
 
     def set_dynamic_budgets(self, initial_usd: Optional[float], reversal_usd: Optional[float]) -> None:
         """Sets capital-derived dynamic order budgets for the strategy."""
@@ -371,9 +373,25 @@ class ReversalStrategy(BaseStrategy):
         self.initial_side = None
         self.initial_order_id = None
         self.reversal_order_placed = False
+        self.rejection_cooldown_until = {}
+        self.last_tick_ts = 0.0
 
-    def on_order_rejected(self, signal_type: str) -> None:
-        """Called when an order signal is rejected (e.g. by RiskManager) so state does not permanently latch."""
+    def on_order_rejected(
+        self,
+        signal_type: str,
+        cooldown_sec: float = 0.0,
+        current_ts: Optional[float] = None,
+    ) -> None:
+        """
+        Called when an order signal is rejected (e.g. by RiskManager or Budget Sizing).
+        Applies a brief cooldown when requested to prevent tight millisecond log spam loops.
+        """
+        now_ts = current_ts if current_ts is not None else self.last_tick_ts
+        if cooldown_sec > 0 and now_ts > 0:
+            self.rejection_cooldown_until[signal_type] = now_ts + cooldown_sec
+        else:
+            self.rejection_cooldown_until.pop(signal_type, None)
+
         if signal_type == "INITIAL":
             self.initial_order_placed = False
             self.initial_side = None
@@ -389,8 +407,15 @@ class ReversalStrategy(BaseStrategy):
         health: Optional[FeedHealthTracker] = None,
         data_receipt_ts: Optional[float] = None,
     ) -> Optional[TradeSignal]:
+        self.last_tick_ts = timestamp_sec
         elapsed = timestamp_sec - self.window_start
         receipt_ts = data_receipt_ts or timestamp_sec
+
+        # Rejection cooldown check to eliminate millisecond retry spam loops
+        if not self.initial_order_placed and self.rejection_cooldown_until.get("INITIAL", 0.0) > timestamp_sec:
+            return None
+        if self.initial_order_placed and not self.reversal_order_placed and self.rejection_cooldown_until.get("REVERSAL", 0.0) > timestamp_sec:
+            return None
 
         # 1. Strict time-window enforcement
         # Waiting phase: first 180 seconds -> NO trades

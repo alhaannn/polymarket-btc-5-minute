@@ -77,17 +77,36 @@ class DynamicTradeBudgetCalculator:
             self.calculate_reversal_budget(active_capital_usd),
         )
 
+    def get_executable_reversal_budget(
+        self,
+        active_capital_usd: float,
+        open_exposure_usd: float = 0.0,
+    ) -> int:
+        """
+        Derives executable whole-dollar reversal budget fitting within free active funds.
+        Prevents budget collisions when initial order is open and fees apply.
+        """
+        if active_capital_usd <= 0:
+            return 0
+        canonical_rev = self.calculate_reversal_budget(active_capital_usd)
+        free_active = max(0.0, active_capital_usd - open_exposure_usd)
+        max_affordable = math.floor(free_active / (1.0 + self.taker_fee_rate))
+        return int(max(0, min(canonical_rev, max_affordable)))
+
     def validate_order_budget(
         self,
         signal_type: str,
         active_capital_usd: float,
         open_exposure_usd: float = 0.0,
         override_budget_usd: Optional[float] = None,
+        allow_adaptive_clamping: bool = False,
     ) -> BudgetValidationResult:
         """
         Validates whether a proposed order can be safely funded by active capital.
         - Computes free active funds after subtracting open exposure.
         - Validates against minimum order size and fee requirements.
+        - Supports adaptive whole-dollar clamping to prevent order rejections when
+          available funds are slightly below the canonical budget (e.g. due to fees or rounding).
         - Ensures protected capital is completely untouched.
         """
         if active_capital_usd < 0:
@@ -141,6 +160,29 @@ class DynamicTradeBudgetCalculator:
 
         # 5. Check free active funds sufficiency (including fees)
         if total_required > free_active:
+            # If adaptive clamping is enabled, attempt to downsize whole-dollar budget to available free funds
+            if allow_adaptive_clamping:
+                max_affordable = math.floor(free_active / (1.0 + self.taker_fee_rate))
+                if max_affordable >= self.min_order_usd:
+                    approved_budget = float(max_affordable)
+                    clamped_fee = round(approved_budget * self.taker_fee_rate, 4)
+                    log.info(
+                        "[BUDGET_ADAPTED] %s order budget clamped to affordable free active funds: "
+                        "approved=$%.2f (calc=$%.2f, fee=$%.3f, free_active=$%.2f)",
+                        signal_type, approved_budget, calc_budget, clamped_fee, free_active,
+                    )
+                    return BudgetValidationResult(
+                        allowed=True,
+                        approved_budget_usd=approved_budget,
+                        calculated_budget_usd=calc_budget,
+                        free_active_usd=free_active,
+                        fee_estimate_usd=clamped_fee,
+                        reason=(
+                            f"Clamped to available free active balance: ${approved_budget:.2f} "
+                            f"(originally ${calc_budget:.2f})."
+                        ),
+                    )
+
             return BudgetValidationResult(
                 allowed=False,
                 approved_budget_usd=0.0,

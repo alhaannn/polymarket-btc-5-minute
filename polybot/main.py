@@ -395,6 +395,14 @@ async def run_paper(config: PolybotConfig, demo: bool = False, reset: bool = Fal
 
                 if isinstance(strat, ReversalStrategy):
                     init_b, rev_b = budget_calc.get_budgets(capital_mgr.state.active_capital)
+                    open_exp = engine.get_open_exposure()
+                    if strat.initial_order_placed or open_exp > 0:
+                        exec_rev = budget_calc.get_executable_reversal_budget(
+                            capital_mgr.state.active_capital,
+                            open_exposure_usd=open_exp,
+                        )
+                        if exec_rev >= budget_calc.min_order_usd:
+                            rev_b = exec_rev
                     strat.set_dynamic_budgets(init_b, rev_b)
 
                 sig = strat.on_tick(cur_price, now, clob.side_books, health)
@@ -407,7 +415,7 @@ async def run_paper(config: PolybotConfig, demo: bool = False, reset: bool = Fal
                     # Daily shutdown halt (Roadmap Phase 5)
                     if capital_mgr.is_daily_shutdown_active(today):
                         if hasattr(strat, "on_order_rejected"):
-                            strat.on_order_rejected(sig.signal_type)
+                            strat.on_order_rejected(sig.signal_type, cooldown_sec=3.0, current_ts=now)
                         log.warning("Order blocked: Daily shutdown active for %s (%s)", today, capital_mgr.state.daily_shutdown_reason)
                         dash_state.add_log("SHUTDOWN", f"Daily shutdown active: {capital_mgr.state.daily_shutdown_reason}")
                         continue
@@ -415,7 +423,7 @@ async def run_paper(config: PolybotConfig, demo: bool = False, reset: bool = Fal
                     # Shortfall safety halt
                     if capital_mgr.state.active_shortfall_cents > 0:
                         if hasattr(strat, "on_order_rejected"):
-                            strat.on_order_rejected(sig.signal_type)
+                            strat.on_order_rejected(sig.signal_type, cooldown_sec=3.0, current_ts=now)
                         log.warning("Order blocked: Active shortfall ($%.2f) exists. Trading halted.", capital_mgr.state.active_shortfall)
                         dash_state.add_log("WARNING", f"Shortfall halt: ${capital_mgr.state.active_shortfall:.2f}")
                         continue
@@ -425,13 +433,26 @@ async def run_paper(config: PolybotConfig, demo: bool = False, reset: bool = Fal
                         signal_type=sig.signal_type,
                         active_capital_usd=capital_mgr.state.active_capital,
                         open_exposure_usd=engine.get_open_exposure(),
+                        override_budget_usd=sig.cost_usd,
+                        allow_adaptive_clamping=True,
                     )
                     if not b_val.allowed:
                         if hasattr(strat, "on_order_rejected"):
-                            strat.on_order_rejected(sig.signal_type)
+                            strat.on_order_rejected(sig.signal_type, cooldown_sec=3.0, current_ts=now)
                         log.warning("[ORDER_BUDGET_REJECTED] %s: %s", sig.signal_type, b_val.reason)
                         dash_state.add_log("REJECTED", f"Order budget blocked ({sig.signal_type}): {b_val.reason}")
                         continue
+
+                    # If budget was adaptively clamped to available free funds, scale stake and shares
+                    if b_val.approved_budget_usd > 0 and b_val.approved_budget_usd < stake_usd:
+                        scale = b_val.approved_budget_usd / stake_usd
+                        stake_usd = b_val.approved_budget_usd
+                        sig.shares = round(sig.shares * scale, 4)
+                        sig.cost_usd = stake_usd
+                        log.info(
+                            "[BUDGET_ADAPTED_EXECUTION] Scaled %s order stake to $%.2f (shares=%.4f)",
+                            sig.signal_type, stake_usd, sig.shares,
+                        )
 
                     allowed, reason = risk.check_trade_allowed(stake_usd, current_window_idx)
                     if allowed:
@@ -471,7 +492,7 @@ async def run_paper(config: PolybotConfig, demo: bool = False, reset: bool = Fal
                         )
                     else:
                         if hasattr(strat, "on_order_rejected"):
-                            strat.on_order_rejected(sig.signal_type)
+                            strat.on_order_rejected(sig.signal_type, cooldown_sec=3.0, current_ts=now)
                         log.warning("Trade rejected by Risk Manager: %s", reason)
                         dash_state.add_log("REJECTED", f"Risk check rejected ({sig.signal_type}): {reason}")
 

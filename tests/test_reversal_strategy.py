@@ -156,3 +156,33 @@ def test_reversal_strategy_on_order_rejected():
     sig_rev_retry = strat.on_tick(current_price=80000.0, timestamp_sec=1215.0, books=b_rev)
     assert sig_rev_retry is not None
     assert strat.reversal_order_placed
+
+
+def test_reversal_rejection_cooldown_prevents_tick_spam():
+    """Verify that rejection cooldown suppresses repeated trigger attempts on millisecond ticks."""
+    strat = ReversalStrategy()
+    strat.reset_window(window_start=1000)
+
+    # Initial order placed
+    books = create_mock_books(up_ask=0.90, down_ask=0.10)
+    sig_init = strat.on_tick(current_price=80000.0, timestamp_sec=1190.0, books=books)
+    assert sig_init is not None
+
+    # Reversal triggered
+    b_rev = create_mock_books(up_ask=0.12, down_ask=0.88)
+    sig_rev = strat.on_tick(current_price=80000.0, timestamp_sec=1200.0, books=b_rev)
+    assert sig_rev is not None
+
+    # Reversal rejected with 3.0s cooldown at t=1200.0
+    strat.on_order_rejected("REVERSAL", cooldown_sec=3.0, current_ts=1200.0)
+
+    # Ticks within 3 seconds must be suppressed (no spamming!)
+    assert strat.on_tick(current_price=80000.0, timestamp_sec=1200.05, books=b_rev) is None
+    assert strat.on_tick(current_price=80000.0, timestamp_sec=1200.50, books=b_rev) is None
+    assert strat.on_tick(current_price=80000.0, timestamp_sec=1202.99, books=b_rev) is None
+
+    # Once cooldown expires at t=1203.01, can trigger again safely
+    sig_after_cooldown = strat.on_tick(current_price=80000.0, timestamp_sec=1203.01, books=b_rev)
+    assert sig_after_cooldown is not None
+    assert sig_after_cooldown.signal_type == "REVERSAL"
+

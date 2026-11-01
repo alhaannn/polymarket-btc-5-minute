@@ -167,3 +167,46 @@ def test_strategy_dynamic_budget_injection():
     assert sig_rev is not None
     assert sig_rev.signal_type == "REVERSAL"
     assert pytest.approx(sig_rev.cost_usd, rel=1e-3) == 77.0  # Dynamic $77 budget!
+
+
+def test_adaptive_clamping_prevents_reversal_block_user_case():
+    """
+    Direct regression test for user scenario:
+    Active capital: $19.38
+    Initial order open exposure: $2.00
+    Canonical reversal: $18.00 (requires $18.018 > $17.38 free)
+    Adaptive clamping must approve $17.00 without blocking.
+    """
+    calc = DynamicTradeBudgetCalculator()
+
+    # 1. Canonical budgets
+    init_b, rev_b = calc.get_budgets(19.38)
+    assert init_b == 2
+    assert rev_b == 18
+
+    # 2. Executable reversal budget derivation
+    exec_rev = calc.get_executable_reversal_budget(active_capital_usd=19.38, open_exposure_usd=2.00)
+    assert exec_rev == 17  # $17.00 fits cleanly in $17.38 free funds with taker fees
+
+    # 3. Without adaptive clamping -> rejected
+    res_strict = calc.validate_order_budget(
+        signal_type="REVERSAL",
+        active_capital_usd=19.38,
+        open_exposure_usd=2.00,
+        allow_adaptive_clamping=False,
+    )
+    assert not res_strict.allowed
+    assert "insufficient free active funds" in res_strict.reason.lower()
+
+    # 4. With adaptive clamping -> approved at $17.00!
+    res_adaptive = calc.validate_order_budget(
+        signal_type="REVERSAL",
+        active_capital_usd=19.38,
+        open_exposure_usd=2.00,
+        allow_adaptive_clamping=True,
+    )
+    assert res_adaptive.allowed
+    assert res_adaptive.approved_budget_usd == 17.0
+    assert res_adaptive.calculated_budget_usd == 18.0
+    assert "clamped to available free active balance" in res_adaptive.reason.lower()
+
