@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 
 from polybot.capital.manager import CapitalManager
 from polybot.capital.models import CapitalTransaction, TransactionType
+from polybot.tz import ist_today_str
 
 log = logging.getLogger("polybot.capital.reconciliation")
 
@@ -120,7 +121,7 @@ class CapitalReconciler:
         - Sets reconciliation_blocked = False
         """
         now = time.time()
-        day_key = trading_day or time.strftime("%Y-%m-%d")
+        day_key = trading_day or ist_today_str()
         recon_id = f"recon-{int(now * 1000)}-{uuid.uuid4().hex[:4]}"
 
         # 1. Determine locked collateral (open positions + pending unfilled orders)
@@ -213,7 +214,7 @@ class CapitalReconciler:
         or correction). Never transfers protected capital to active to paper over trading losses.
         """
         now = time.time()
-        day_key = trading_day or time.strftime("%Y-%m-%d")
+        day_key = trading_day or ist_today_str()
         amount_cents = int(round(amount_usd * 100))
 
         state = self.capital_mgr.state

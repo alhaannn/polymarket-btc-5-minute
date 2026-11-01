@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 from polybot.config import RiskConfig
+from polybot.tz import ist_today_str
 
 log = logging.getLogger("polybot.risk")
 
@@ -27,7 +28,7 @@ class RiskManager:
     def __init__(self, config: Optional[RiskConfig] = None):
         self.config = config or RiskConfig()
 
-        self.current_day: str = time.strftime("%Y-%m-%d")
+        self.current_day: str = ist_today_str()
         self.daily_pnl: float = 0.0
         self.daily_trades: int = 0
         self.consecutive_losses: int = 0
@@ -40,7 +41,7 @@ class RiskManager:
         self.current_open_exposure = max(0.0, float(exposure_usd))
 
     def _check_day_rollover(self) -> None:
-        today = time.strftime("%Y-%m-%d")
+        today = ist_today_str()
         if today != self.current_day:
             log.info("Day rollover: resetting daily risk counters (old PnL=$%+.2f)", self.daily_pnl)
             self.current_day = today

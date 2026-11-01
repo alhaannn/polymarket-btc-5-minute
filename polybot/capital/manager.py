@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from polybot.capital.ledger import CapitalLedger
 from polybot.capital.models import CapitalState, CapitalTransaction, TransactionType
+from polybot.tz import ist_today_str
 
 log = logging.getLogger("polybot.capital.manager")
 
@@ -100,7 +101,7 @@ class CapitalManager:
         If a new trading day begins, daily failure counters reset to 0.
         If a previous day's shutdown was active, it is deactivated for the new day.
         """
-        today = current_trading_day or time.strftime("%Y-%m-%d")
+        today = current_trading_day or ist_today_str()
         if self.state.daily_failure_trading_day != today:
             log.info("Day rollover detected: %s -> %s. Resetting daily failure counters.",
                      self.state.daily_failure_trading_day, today)
@@ -119,7 +120,7 @@ class CapitalManager:
         for the given trading day.
         """
         self.check_day_rollover(current_trading_day)
-        today = current_trading_day or time.strftime("%Y-%m-%d")
+        today = current_trading_day or ist_today_str()
         return bool(
             self.state.daily_shutdown_status
             and self.state.daily_shutdown_trading_day == today
@@ -228,7 +229,7 @@ class CapitalManager:
             log.warning("Settlement %s already processed. Skipping duplicate.", settlement_id)
             return self.state
 
-        day_key = trading_day or time.strftime("%Y-%m-%d")
+        day_key = trading_day or ist_today_str()
         self.check_day_rollover(day_key)
         net_pnl_cents = int(round(net_pnl_usd * 100))
         fee_cents = int(round(fee_usd * 100))
@@ -540,7 +541,7 @@ class CapitalManager:
         and ADDS it to existing active capital. Total equity remains identical.
         Returns: (activated: bool, released_usd: float, message: str)
         """
-        today = current_trading_day or time.strftime("%Y-%m-%d")
+        today = current_trading_day or ist_today_str()
         self.check_day_rollover(today)
 
         unactivated_event = self.ledger.get_unactivated_shutdown_event()
