@@ -505,30 +505,32 @@ class CapitalManager:
 
     def check_and_activate_next_day_reserve(
         self,
-        current_trading_day: str,
+        current_trading_day: Optional[str] = None,
     ) -> Tuple[bool, float, str]:
         """
-        Option B Next-Day Reserve Release:
-        If the prior day triggered the daily shutdown, releases 50% of current protected capital
+        Option B Next-Day Reserve Release (Roadmap Phase 6):
+        If a prior day triggered the daily shutdown, releases 50% of current protected capital
         and ADDS it to existing active capital. Total equity remains identical.
         Returns: (activated: bool, released_usd: float, message: str)
         """
-        if not self.state.next_day_activation_eligible:
-            return False, 0.0, "No qualifying shutdown event eligible for reserve release"
-
-        if self.state.daily_shutdown_trading_day == current_trading_day:
-            return False, 0.0, "Cannot activate reserve on the same trading day as the shutdown"
-
-        if self.state.protected_capital_cents <= 0:
-            self.state.next_day_activation_eligible = False
-            return False, 0.0, "Protected capital is zero; no reserve available to release"
+        today = current_trading_day or time.strftime("%Y-%m-%d")
+        self.check_day_rollover(today)
 
         unactivated_event = self.ledger.get_unactivated_shutdown_event()
         if not unactivated_event:
             self.state.next_day_activation_eligible = False
-            return False, 0.0, "No unactivated shutdown event record found"
+            return False, 0.0, "No qualifying shutdown event eligible for reserve release"
 
+        shutdown_day = unactivated_event["trading_day"]
         event_id = unactivated_event["event_id"]
+
+        if today <= shutdown_day:
+            return False, 0.0, f"Cannot activate reserve on or before shutdown day ({shutdown_day})"
+
+        if self.state.protected_capital_cents <= 0:
+            self.state.next_day_activation_eligible = False
+            self.ledger.mark_shutdown_event_activated(event_id, activated_at_ts=time.time())
+            return False, 0.0, "Protected capital is zero; no reserve available to release"
 
         # Calculate exact 50% release of current protected capital
         protected_before = self.state.protected_capital_cents
@@ -543,7 +545,7 @@ class CapitalManager:
         self.state.protected_capital_cents = new_protected
         self.state.next_day_activation_eligible = False
         self.state.last_activated_shutdown_event_id = event_id
-        self.state.last_activation_trading_day = current_trading_day
+        self.state.last_activation_trading_day = today
         self.state.daily_shutdown_status = False  # Reset shutdown for new day
         self.state.daily_shutdown_reason = ""
 
@@ -558,14 +560,17 @@ class CapitalManager:
             total_before_cents=total_before,
             total_after_cents=total_before,  # Total equity unchanged!
             fee_cents=0,
-            trading_day=current_trading_day,
-            reason=f"Option B: Released 50% protected capital (${released_cents/100:.2f}) into active capital for new day {current_trading_day}",
+            trading_day=today,
+            reason=f"Option B: Released 50% protected capital (${released_cents/100:.2f}) into active capital for new day {today}",
             idempotency_key=f"reserve-release-{event_id}",
         )
 
-        now = time.time()
-        self.ledger.mark_shutdown_event_activated(event_id, activated_at_ts=now)
-        self.ledger.save_state_and_transaction(self.state, tx)
+        # Atomic commit: state update + transaction audit + shutdown event marked activated
+        self.ledger.save_state_and_transaction(
+            self.state,
+            tx,
+            activate_shutdown_event_id=event_id,
+        )
         self.verify_invariants()
 
         released_usd = round(released_cents / 100.0, 2)

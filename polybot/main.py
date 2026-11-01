@@ -108,6 +108,14 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
     dash_state = DashboardState()
     dash_state.set_bot_status("RUNNING")
     dash_state.strategy_name = config.strategy.strategy_name
+
+    # Check for Option B reserve activation upon bot startup/restart (Roadmap Phase 6)
+    today = time.strftime("%Y-%m-%d")
+    activated, released_usd, _ = capital_mgr.check_and_activate_next_day_reserve(today)
+    if activated:
+        dash_state.add_log("RESERVE", f"Option B Reserve Release on startup: +${released_usd:.2f} active funds released for {today}")
+        log.info("Option B Reserve Release on startup: +$%.2f into active capital", released_usd)
+
     dash_state.update_capital(capital_mgr.state.to_dict())
 
     dash_server = None
@@ -345,6 +353,14 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
             # Check for trade signal if not paused (passing side_books)
             if not is_paused:
                 cur_price = health.chainlink.last_price or 0.0
+
+                # Check Option B Reserve Release for new trading day (Roadmap Phase 6)
+                today = time.strftime("%Y-%m-%d")
+                activated, released_usd, _ = capital_mgr.check_and_activate_next_day_reserve(today)
+                if activated:
+                    dash_state.add_log("RESERVE", f"Option B Reserve Release: +${released_usd:.2f} active funds released for {today}")
+                    dash_state.update_capital(capital_mgr.state.to_dict())
+                    log.info("Option B Reserve Release executed for %s: +$%.2f into active capital", today, released_usd)
 
                 if isinstance(strat, ReversalStrategy):
                     init_b, rev_b = budget_calc.get_budgets(capital_mgr.state.active_capital)

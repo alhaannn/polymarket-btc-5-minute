@@ -155,6 +155,7 @@ class CapitalLedger:
         tx: CapitalTransaction,
         processed_settlement: Optional[Dict[str, Any]] = None,
         shutdown_event: Optional[Dict[str, Any]] = None,
+        activate_shutdown_event_id: Optional[str] = None,
     ) -> None:
         """Atomically persists updated state and the corresponding audit transaction."""
         now = time.time()
@@ -255,6 +256,14 @@ class CapitalLedger:
                     shutdown_event.get("activated_at_ts"),
                     shutdown_event.get("created_at_ts", now),
                 ))
+
+            # 5. Mark shutdown event activated atomically within same transaction
+            if activate_shutdown_event_id:
+                conn.execute("""
+                    UPDATE shutdown_events
+                    SET activated = 1, activated_at_ts = ?
+                    WHERE event_id = ?
+                """, (now, activate_shutdown_event_id))
 
             conn.commit()
 
