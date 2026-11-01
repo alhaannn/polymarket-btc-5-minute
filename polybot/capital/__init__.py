@@ -14,6 +14,12 @@ from polybot.capital.reconciliation import (
     ExchangeBalanceSnapshot,
     ReconciliationReport,
 )
+from polybot.capital.simulation import (
+    HistoricalReplayEngine,
+    ReplayMode,
+    SimulationSummary,
+    ReplayTradeResult,
+)
 
 __all__ = [
     "CapitalState",
@@ -27,4 +33,8 @@ __all__ = [
     "CapitalReconciler",
     "ExchangeBalanceSnapshot",
     "ReconciliationReport",
+    "HistoricalReplayEngine",
+    "ReplayMode",
+    "SimulationSummary",
+    "ReplayTradeResult",
 ]
