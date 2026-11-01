@@ -20,6 +20,11 @@ from polybot.capital.simulation import (
     SimulationSummary,
     ReplayTradeResult,
 )
+from polybot.capital.soak import (
+    PaperTradingSoakRunner,
+    SoakTestReport,
+    SoakEventLog,
+)
 
 __all__ = [
     "CapitalState",
@@ -37,4 +42,7 @@ __all__ = [
     "ReplayMode",
     "SimulationSummary",
     "ReplayTradeResult",
+    "PaperTradingSoakRunner",
+    "SoakTestReport",
+    "SoakEventLog",
 ]
