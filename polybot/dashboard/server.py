@@ -47,8 +47,13 @@ def create_dashboard_app(
         return JSONResponse(summary)
 
     async def get_trades(request: Request) -> JSONResponse:
-        trades = ledger.get_recent_trades(limit=100)
+        limit = int(request.query_params.get("limit", 1000))
+        trades = ledger.get_recent_trades(limit=limit)
         return JSONResponse(trades)
+
+    async def get_logs(request: Request) -> JSONResponse:
+        limit = int(request.query_params.get("limit", 1000))
+        return JSONResponse(list(state.logs)[:limit])
 
     async def export_trades_csv(request: Request) -> Response:
         trades = ledger.get_recent_trades(limit=1000)
@@ -76,7 +81,7 @@ def create_dashboard_app(
         return JSONResponse(cap_dict)
 
     async def get_capital_transactions(request: Request) -> JSONResponse:
-        limit = int(request.query_params.get("limit", 100))
+        limit = int(request.query_params.get("limit", 1000))
         if capital_mgr and hasattr(capital_mgr, "ledger"):
             txs = capital_mgr.ledger.get_recent_transactions(limit=limit)
             return JSONResponse(txs)
@@ -114,6 +119,7 @@ def create_dashboard_app(
         Route("/api/state", endpoint=get_state, methods=["GET"]),
         Route("/api/performance", endpoint=get_performance, methods=["GET"]),
         Route("/api/trades", endpoint=get_trades, methods=["GET"]),
+        Route("/api/logs", endpoint=get_logs, methods=["GET"]),
         Route("/api/trades/csv", endpoint=export_trades_csv, methods=["GET"]),
         Route("/api/capital", endpoint=get_capital, methods=["GET"]),
         Route("/api/capital/transactions", endpoint=get_capital_transactions, methods=["GET"]),

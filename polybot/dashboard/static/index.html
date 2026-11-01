@@ -303,6 +303,7 @@
         <div class="time-tabs" id="archive-tabs" style="margin-right: 12px;">
           <button class="tab-btn active" data-tab="orders" id="tab-orders" onclick="switchArchiveTab('orders')">Simulated Orders</button>
           <button class="tab-btn" data-tab="capital-tx" id="tab-capital-tx" onclick="switchArchiveTab('capital-tx')">Capital Transactions</button>
+          <button class="tab-btn" data-tab="logs" id="tab-archive-logs" onclick="switchArchiveTab('logs')">Execution & Trade Logs</button>
         </div>
         <button class="btn btn-sm btn-outline" id="btn-export-csv" onclick="exportTradesCSV()">Export CSV</button>
       </div>
@@ -357,6 +358,25 @@
             </tr>
           </tbody>
         </table>
+      </div>
+
+      <!-- Tab 3: Execution & Trade Logs View (Compact container, 50 logs per page) -->
+      <div class="archive-logs-container" id="view-archive-logs" style="display: none;">
+        <div class="log-stream-container compact-log-container" id="archive-log-stream">
+          <div class="log-empty">No execution logs recorded yet.</div>
+        </div>
+      </div>
+
+      <!-- Pagination Controls (50 items per page with First / Prev / Next / Last) -->
+      <div class="pagination-bar" id="archive-pagination">
+        <div class="pagination-info" id="pagination-info">Showing 1–0 of 0 entries</div>
+        <div class="pagination-controls">
+          <button class="btn btn-sm btn-outline btn-page" id="btn-page-first" onclick="goToPage('first')" title="First Page">&laquo; First</button>
+          <button class="btn btn-sm btn-outline btn-page" id="btn-page-prev" onclick="goToPage('prev')" title="Previous Page">&lsaquo; Prev</button>
+          <span class="page-indicator" id="page-indicator">Page 1 of 1</span>
+          <button class="btn btn-sm btn-outline btn-page" id="btn-page-next" onclick="goToPage('next')" title="Next Page">Next &rsaquo;</button>
+          <button class="btn btn-sm btn-outline btn-page" id="btn-page-last" onclick="goToPage('last')" title="Last Page">Last &raquo;</button>
+        </div>
       </div>
     </section>
 

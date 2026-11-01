@@ -9,6 +9,18 @@ let lastLogTimestamp = 0;
 let autoScrollEnabled = true;
 let lastRenderedLogHash = '';
 
+// Pagination state for Execution & Capital Ledger History (50 items per page)
+const PAGE_SIZE = 50;
+let currentArchiveTab = 'orders';
+let allTrades = [];
+let allCapitalTxs = [];
+let allArchiveLogs = [];
+const archivePages = {
+  orders: 1,
+  'capital-tx': 1,
+  logs: 1,
+};
+
 document.addEventListener('DOMContentLoaded', () => {
   initPolling();
   updateClockIST();
@@ -53,16 +65,32 @@ function initPolling() {
   fetchPerformance();
   fetchTrades();
   fetchCapitalTransactions();
+  fetchArchiveLogs();
 
   // Rapid refresh cycle for smooth market timer & probability gauges (500ms)
   setInterval(fetchState, 500);
-  // Metrics, capital & trades poll every 2.0s
+  // Metrics, capital, trades, & archive logs poll every 2.0s
   setInterval(() => {
     fetchCapital();
     fetchPerformance();
     fetchTrades();
     fetchCapitalTransactions();
+    fetchArchiveLogs();
   }, 2000);
+}
+
+async function fetchArchiveLogs() {
+  try {
+    const res = await fetch('/api/logs?limit=1000');
+    if (!res.ok) throw new Error('Logs fetch failed');
+    const logs = await res.json();
+    allArchiveLogs = logs || [];
+    if (currentArchiveTab === 'logs') {
+      renderArchiveLogs();
+    }
+  } catch (err) {
+    console.debug('Archive logs poll error:', err);
+  }
 }
 
 async function fetchState() {
@@ -90,10 +118,11 @@ async function fetchPerformance() {
 
 async function fetchTrades() {
   try {
-    const res = await fetch('/api/trades');
+    const res = await fetch('/api/trades?limit=1000');
     if (!res.ok) throw new Error('Trades fetch failed');
     const trades = await res.json();
-    renderTradesTable(trades);
+    allTrades = trades || [];
+    renderTradesTable();
   } catch (err) {
     console.debug('Trades poll error:', err);
   }
@@ -412,60 +441,73 @@ function switchPerfTab(tabName) {
 }
 
 function renderTradesTable(trades) {
+  if (trades !== undefined) {
+    allTrades = trades || [];
+  }
   const tbody = document.getElementById('tbody-trades');
   if (!tbody) return;
 
-  if (!trades || trades.length === 0) {
+  const total = allTrades.length;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  if (archivePages.orders > totalPages) archivePages.orders = totalPages;
+  if (archivePages.orders < 1) archivePages.orders = 1;
+
+  const page = archivePages.orders;
+  const start = (page - 1) * PAGE_SIZE;
+  const pageItems = allTrades.slice(start, start + PAGE_SIZE);
+
+  if (total === 0) {
     tbody.innerHTML = `
       <tr class="table-row-empty">
         <td colspan="13">No paper trades recorded yet in this session.</td>
       </tr>
     `;
-    return;
+  } else {
+    tbody.innerHTML = pageItems.map(t => {
+      const isWin = t.winner && t.side === t.winner;
+      const isLoss = t.winner && t.side !== t.winner;
+      let pnlClass = 'pnl-neutral';
+      let pnlText = '--';
+
+      if (t.status === 'SETTLED' && t.pnl_usd !== null) {
+        pnlClass = t.pnl_usd >= 0 ? 'text-green' : 'text-red';
+        pnlText = `${t.pnl_usd >= 0 ? '+' : ''}$${t.pnl_usd.toFixed(2)}`;
+      }
+
+      const typeBadge = t.signal_type === 'REVERSAL'
+        ? `<span class="badge-tag-reversal">REVERSAL 10x</span>`
+        : `<span class="badge-tag-initial">INITIAL $1</span>`;
+
+      const sideBadge = t.side === 'Up'
+        ? `<span class="outcome-pill pill-up">UP</span>`
+        : `<span class="outcome-pill pill-down">DOWN</span>`;
+
+      const timeStr = formatISTTime(t.exec_ts);
+      const latStr = t.latency_ms ? `${t.latency_ms.toFixed(1)}ms` : '< 1ms';
+
+      return `
+        <tr>
+          <td><code>${t.order_id}</code></td>
+          <td><code>${t.slug}</code></td>
+          <td>${typeBadge}</td>
+          <td>${sideBadge}</td>
+          <td>$${t.stake_usd.toFixed(2)}</td>
+          <td>${t.shares.toFixed(2)}</td>
+          <td>$${t.avg_price.toFixed(3)}</td>
+          <td>${t.trigger_prob ? (t.trigger_prob * 100).toFixed(1) + '%' : '--'}</td>
+          <td>${latStr}</td>
+          <td>${timeStr}</td>
+          <td><strong>${t.status}</strong></td>
+          <td>${t.winner || '--'}</td>
+          <td class="${pnlClass}"><strong>${pnlText}</strong></td>
+        </tr>
+      `;
+    }).join('');
   }
 
-  const rowsHtml = trades.map(t => {
-    const isWin = t.winner && t.side === t.winner;
-    const isLoss = t.winner && t.side !== t.winner;
-    let pnlClass = 'pnl-neutral';
-    let pnlText = '--';
-
-    if (t.status === 'SETTLED' && t.pnl_usd !== null) {
-      pnlClass = t.pnl_usd >= 0 ? 'text-green' : 'text-red';
-      pnlText = `${t.pnl_usd >= 0 ? '+' : ''}$${t.pnl_usd.toFixed(2)}`;
-    }
-
-    const typeBadge = t.signal_type === 'REVERSAL'
-      ? `<span class="badge-tag-reversal">REVERSAL 10x</span>`
-      : `<span class="badge-tag-initial">INITIAL $1</span>`;
-
-    const sideBadge = t.side === 'Up'
-      ? `<span class="outcome-pill pill-up">UP</span>`
-      : `<span class="outcome-pill pill-down">DOWN</span>`;
-
-    const timeStr = formatISTTime(t.exec_ts);
-    const latStr = t.latency_ms ? `${t.latency_ms.toFixed(1)}ms` : '< 1ms';
-
-    return `
-      <tr>
-        <td><code>${t.order_id}</code></td>
-        <td><code>${t.slug}</code></td>
-        <td>${typeBadge}</td>
-        <td>${sideBadge}</td>
-        <td>$${t.stake_usd.toFixed(2)}</td>
-        <td>${t.shares.toFixed(2)}</td>
-        <td>$${t.avg_price.toFixed(3)}</td>
-        <td>${t.trigger_prob ? (t.trigger_prob * 100).toFixed(1) + '%' : '--'}</td>
-        <td>${latStr}</td>
-        <td>${timeStr}</td>
-        <td><strong>${t.status}</strong></td>
-        <td>${t.winner || '--'}</td>
-        <td class="${pnlClass}"><strong>${pnlText}</strong></td>
-      </tr>
-    `;
-  }).join('');
-
-  tbody.innerHTML = rowsHtml;
+  if (currentArchiveTab === 'orders') {
+    updatePaginationControls(total, page, totalPages, 'orders');
+  }
 }
 
 async function sendControl(action) {
@@ -614,79 +656,188 @@ function renderCapital(cap) {
 
 async function fetchCapitalTransactions() {
   try {
-    const res = await fetch('/api/capital/transactions?limit=50');
+    const res = await fetch('/api/capital/transactions?limit=1000');
     if (!res.ok) throw new Error('Capital transactions fetch failed');
     const txs = await res.json();
-    renderCapitalTransactions(txs);
+    allCapitalTxs = txs || [];
+    renderCapitalTransactions();
   } catch (err) {
     console.debug('Capital tx poll error:', err);
   }
 }
 
 function renderCapitalTransactions(txs) {
+  if (txs !== undefined) {
+    allCapitalTxs = txs || [];
+  }
   const tbody = document.getElementById('tbody-capital-transactions');
   if (!tbody) return;
 
-  if (!txs || txs.length === 0) {
+  const total = allCapitalTxs.length;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  if (archivePages['capital-tx'] > totalPages) archivePages['capital-tx'] = totalPages;
+  if (archivePages['capital-tx'] < 1) archivePages['capital-tx'] = 1;
+
+  const page = archivePages['capital-tx'];
+  const start = (page - 1) * PAGE_SIZE;
+  const pageItems = allCapitalTxs.slice(start, start + PAGE_SIZE);
+
+  if (total === 0) {
     tbody.innerHTML = `
       <tr class="table-row-empty">
         <td colspan="9">No capital transactions recorded yet in ledger.</td>
       </tr>
     `;
-    return;
+  } else {
+    tbody.innerHTML = pageItems.map(t => {
+      const amtUsd = (t.amount_cents / 100.0).toFixed(2);
+      const actBefore = (t.active_before_cents / 100.0).toFixed(2);
+      const actAfter = (t.active_after_cents / 100.0).toFixed(2);
+      const protBefore = (t.protected_before_cents / 100.0).toFixed(2);
+      const protAfter = (t.protected_after_cents / 100.0).toFixed(2);
+      const totAfter = (t.total_after_cents / 100.0).toFixed(2);
+
+      let tagClass = 'badge-tag-initial';
+      if (t.event_type.includes('MILESTONE')) tagClass = 'status-pill status-running';
+      else if (t.event_type.includes('RESERVE')) tagClass = 'status-pill mode-paper';
+      else if (t.event_type.includes('LOSS')) tagClass = 'status-pill status-stopped';
+      else if (t.event_type.includes('PROFIT')) tagClass = 'status-pill status-running';
+
+      const timeStr = formatISTTime(t.created_at_ts);
+
+      return `
+        <tr>
+          <td><code>${t.tx_id}</code></td>
+          <td><span class="${tagClass}">${t.event_type}</span></td>
+          <td><strong>$${amtUsd}</strong></td>
+          <td>$${actBefore} &rarr; <strong>$${actAfter}</strong></td>
+          <td>$${protBefore} &rarr; <strong>$${protAfter}</strong></td>
+          <td><strong>$${totAfter}</strong></td>
+          <td><code>${t.trading_day || '--'}</code></td>
+          <td>${timeStr}</td>
+          <td>${escapeHtml(t.reason)}</td>
+        </tr>
+      `;
+    }).join('');
   }
 
-  const rowsHtml = txs.map(t => {
-    const amtUsd = (t.amount_cents / 100.0).toFixed(2);
-    const actBefore = (t.active_before_cents / 100.0).toFixed(2);
-    const actAfter = (t.active_after_cents / 100.0).toFixed(2);
-    const protBefore = (t.protected_before_cents / 100.0).toFixed(2);
-    const protAfter = (t.protected_after_cents / 100.0).toFixed(2);
-    const totAfter = (t.total_after_cents / 100.0).toFixed(2);
+  if (currentArchiveTab === 'capital-tx') {
+    updatePaginationControls(total, page, totalPages, 'transactions');
+  }
+}
 
-    let tagClass = 'badge-tag-initial';
-    if (t.event_type.includes('MILESTONE')) tagClass = 'status-pill status-running';
-    else if (t.event_type.includes('RESERVE')) tagClass = 'status-pill mode-paper';
-    else if (t.event_type.includes('LOSS')) tagClass = 'status-pill status-stopped';
-    else if (t.event_type.includes('PROFIT')) tagClass = 'status-pill status-running';
+function renderArchiveLogs(logs) {
+  if (logs !== undefined) {
+    allArchiveLogs = logs || [];
+  }
+  const container = document.getElementById('archive-log-stream');
+  if (!container) return;
 
-    const timeStr = formatISTTime(t.created_at_ts);
+  const total = allArchiveLogs.length;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  if (archivePages.logs > totalPages) archivePages.logs = totalPages;
+  if (archivePages.logs < 1) archivePages.logs = 1;
 
-    return `
-      <tr>
-        <td><code>${t.tx_id}</code></td>
-        <td><span class="${tagClass}">${t.event_type}</span></td>
-        <td><strong>$${amtUsd}</strong></td>
-        <td>$${actBefore} &rarr; <strong>$${actAfter}</strong></td>
-        <td>$${protBefore} &rarr; <strong>$${protAfter}</strong></td>
-        <td><strong>$${totAfter}</strong></td>
-        <td><code>${t.trading_day || '--'}</code></td>
-        <td>${timeStr}</td>
-        <td>${escapeHtml(t.reason)}</td>
-      </tr>
-    `;
-  }).join('');
+  const page = archivePages.logs;
+  const start = (page - 1) * PAGE_SIZE;
+  const pageItems = allArchiveLogs.slice(start, start + PAGE_SIZE);
 
-  tbody.innerHTML = rowsHtml;
+  if (total === 0) {
+    container.innerHTML = '<div class="log-empty">No execution logs recorded yet.</div>';
+  } else {
+    container.innerHTML = pageItems.map(l => {
+      const tagClass = getTagClass(l.level);
+      const timeStr = l.timestamp ? formatISTTime(l.timestamp) : (l.time_str || '--');
+      return `
+        <div class="log-entry">
+          <span class="log-time">${timeStr}</span>
+          <span class="log-tag ${tagClass}">${escapeHtml(l.level)}</span>
+          <span class="log-message">${escapeHtml(l.message)}</span>
+        </div>
+      `;
+    }).join('');
+  }
+
+  if (currentArchiveTab === 'logs') {
+    updatePaginationControls(total, page, totalPages, 'logs');
+  }
+}
+
+function updatePaginationControls(total, page, totalPages, label) {
+  const infoEl = document.getElementById('pagination-info');
+  const indEl = document.getElementById('page-indicator');
+  const btnFirst = document.getElementById('btn-page-first');
+  const btnPrev = document.getElementById('btn-page-prev');
+  const btnNext = document.getElementById('btn-page-next');
+  const btnLast = document.getElementById('btn-page-last');
+
+  const start = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
+  const end = Math.min(page * PAGE_SIZE, total);
+
+  if (infoEl) {
+    infoEl.textContent = `Showing ${start}–${end} of ${total} ${label}`;
+  }
+  if (indEl) {
+    indEl.textContent = `Page ${page} of ${totalPages}`;
+  }
+
+  if (btnFirst) btnFirst.disabled = (page <= 1);
+  if (btnPrev) btnPrev.disabled = (page <= 1);
+  if (btnNext) btnNext.disabled = (page >= totalPages || total === 0);
+  if (btnLast) btnLast.disabled = (page >= totalPages || total === 0);
+}
+
+function goToPage(action) {
+  const tab = currentArchiveTab;
+  let totalItems = 0;
+  if (tab === 'orders') totalItems = allTrades.length;
+  else if (tab === 'capital-tx') totalItems = allCapitalTxs.length;
+  else if (tab === 'logs') totalItems = allArchiveLogs.length;
+
+  const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
+  let curr = archivePages[tab] || 1;
+
+  if (action === 'first') {
+    curr = 1;
+  } else if (action === 'prev') {
+    curr = Math.max(1, curr - 1);
+  } else if (action === 'next') {
+    curr = Math.min(totalPages, curr + 1);
+  } else if (action === 'last') {
+    curr = totalPages;
+  }
+
+  archivePages[tab] = curr;
+  if (tab === 'orders') renderTradesTable();
+  else if (tab === 'capital-tx') renderCapitalTransactions();
+  else if (tab === 'logs') renderArchiveLogs();
 }
 
 function switchArchiveTab(tabName) {
+  currentArchiveTab = tabName;
   const ordersTab = document.getElementById('tab-orders');
   const capTxTab = document.getElementById('tab-capital-tx');
+  const logsTab = document.getElementById('tab-archive-logs');
   const ordersView = document.getElementById('view-orders-table');
   const capView = document.getElementById('view-capital-table');
+  const logsView = document.getElementById('view-archive-logs');
+
+  if (ordersTab) ordersTab.classList.toggle('active', tabName === 'orders');
+  if (capTxTab) capTxTab.classList.toggle('active', tabName === 'capital-tx');
+  if (logsTab) logsTab.classList.toggle('active', tabName === 'logs');
+
+  if (ordersView) ordersView.style.display = (tabName === 'orders' ? 'block' : 'none');
+  if (capView) capView.style.display = (tabName === 'capital-tx' ? 'block' : 'none');
+  if (logsView) logsView.style.display = (tabName === 'logs' ? 'block' : 'none');
 
   if (tabName === 'orders') {
-    if (ordersTab) ordersTab.classList.add('active');
-    if (capTxTab) capTxTab.classList.remove('active');
-    if (ordersView) ordersView.style.display = 'block';
-    if (capView) capView.style.display = 'none';
-  } else {
-    if (ordersTab) ordersTab.classList.remove('active');
-    if (capTxTab) capTxTab.classList.add('active');
-    if (ordersView) ordersView.style.display = 'none';
-    if (capView) capView.style.display = 'block';
-    fetchCapitalTransactions();
+    renderTradesTable();
+  } else if (tabName === 'capital-tx') {
+    if (allCapitalTxs.length === 0) fetchCapitalTransactions();
+    else renderCapitalTransactions();
+  } else if (tabName === 'logs') {
+    if (allArchiveLogs.length === 0) fetchArchiveLogs();
+    else renderArchiveLogs();
   }
 }
 
