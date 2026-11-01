@@ -54,6 +54,7 @@ class CapitalLedger:
                     daily_failed_reversal_count INTEGER NOT NULL DEFAULT 0,
                     daily_failure_trading_day TEXT NOT NULL DEFAULT '',
                     next_day_activation_eligible INTEGER NOT NULL DEFAULT 0,
+                    shutdown_until_ts REAL,
                     last_activated_shutdown_event_id TEXT,
                     last_activation_trading_day TEXT,
                     last_processed_settlement_id TEXT,
@@ -76,6 +77,8 @@ class CapitalLedger:
                 conn.execute("ALTER TABLE capital_state ADD COLUMN daily_failed_reversal_count INTEGER NOT NULL DEFAULT 0")
             if "daily_failure_trading_day" not in cols:
                 conn.execute("ALTER TABLE capital_state ADD COLUMN daily_failure_trading_day TEXT NOT NULL DEFAULT ''")
+            if "shutdown_until_ts" not in cols:
+                conn.execute("ALTER TABLE capital_state ADD COLUMN shutdown_until_ts REAL")
             if "last_reconciliation_ts" not in cols:
                 conn.execute("ALTER TABLE capital_state ADD COLUMN last_reconciliation_ts REAL NOT NULL DEFAULT 0.0")
             if "last_reconciliation_status" not in cols:
@@ -171,6 +174,7 @@ class CapitalLedger:
                 daily_failed_reversal_count=row["daily_failed_reversal_count"] if "daily_failed_reversal_count" in row_keys else 0,
                 daily_failure_trading_day=row["daily_failure_trading_day"] if "daily_failure_trading_day" in row_keys else "",
                 next_day_activation_eligible=bool(row["next_day_activation_eligible"]),
+                shutdown_until_ts=row["shutdown_until_ts"] if "shutdown_until_ts" in row_keys else None,
                 last_activated_shutdown_event_id=row["last_activated_shutdown_event_id"],
                 last_activation_trading_day=row["last_activation_trading_day"],
                 last_processed_settlement_id=row["last_processed_settlement_id"],
@@ -204,13 +208,13 @@ class CapitalLedger:
                     milestone_44_activated, daily_shutdown_status, daily_shutdown_reason,
                     daily_shutdown_trading_day, daily_failed_initial_count,
                     daily_failed_reversal_count, daily_failure_trading_day,
-                    next_day_activation_eligible, last_activated_shutdown_event_id,
+                    next_day_activation_eligible, shutdown_until_ts, last_activated_shutdown_event_id,
                     last_activation_trading_day, last_processed_settlement_id,
                     last_reconciliation_ts, last_reconciliation_status,
                     last_reconciliation_diff_cents, reconciliation_blocked,
                     capital_ledger_version, updated_at_ts
                 ) VALUES (
-                    1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 )
             """, (
                 state.total_equity_cents,
@@ -227,6 +231,7 @@ class CapitalLedger:
                 state.daily_failed_reversal_count,
                 state.daily_failure_trading_day,
                 1 if state.next_day_activation_eligible else 0,
+                state.shutdown_until_ts,
                 state.last_activated_shutdown_event_id,
                 state.last_activation_trading_day,
                 state.last_processed_settlement_id,
@@ -437,13 +442,13 @@ class CapitalLedger:
                     milestone_44_activated, daily_shutdown_status, daily_shutdown_reason,
                     daily_shutdown_trading_day, daily_failed_initial_count,
                     daily_failed_reversal_count, daily_failure_trading_day,
-                    next_day_activation_eligible, last_activated_shutdown_event_id,
+                    next_day_activation_eligible, shutdown_until_ts, last_activated_shutdown_event_id,
                     last_activation_trading_day, last_processed_settlement_id,
                     last_reconciliation_ts, last_reconciliation_status,
                     last_reconciliation_diff_cents, reconciliation_blocked,
                     capital_ledger_version, updated_at_ts
                 ) VALUES (
-                    1, ?, ?, 0, 0, 0, 0, 0, 0, '', '', 0, 0, ?, 0, NULL, NULL, NULL, 0.0, 'OK', 0, 0, 1, ?
+                    1, ?, ?, 0, 0, 0, 0, 0, 0, '', '', 0, 0, ?, 0, NULL, NULL, NULL, NULL, 0.0, 'OK', 0, 0, 1, ?
                 )
             """, (cents, cents, day, now))
 

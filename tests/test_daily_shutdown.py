@@ -69,8 +69,8 @@ def test_multiple_initial_failures_alone_do_not_trigger_shutdown(manager):
     assert manager.is_daily_shutdown_active(day) is False
 
 
-def test_reversal_failure_alone_does_not_trigger_shutdown(manager):
-    """One failed reversal trade alone must NOT trigger daily shutdown."""
+def test_reversal_failure_alone_triggers_12h_shutdown(manager):
+    """One failed reversal trade alone trips the 12-hour cooling shutdown."""
     day = "2026-11-01"
     manager.process_settlement(
         settlement_id="rev-fail-1",
@@ -82,17 +82,23 @@ def test_reversal_failure_alone_does_not_trigger_shutdown(manager):
 
     assert manager.state.daily_failed_initial_count == 0
     assert manager.state.daily_failed_reversal_count == 1
-    assert manager.state.daily_shutdown_status is False
-    assert manager.is_daily_shutdown_active(day) is False
+    assert manager.state.daily_shutdown_status is True
+    assert manager.state.shutdown_until_ts is not None
+    assert manager.is_daily_shutdown_active(day) is True
+
+    # Budgets are halted
+    init_b, rev_b = manager.get_trade_budgets(day)
+    assert init_b == 0
+    assert rev_b == 0
 
 
-def test_conjunctive_both_failures_on_same_day_triggers_shutdown(manager):
+def test_reversal_loss_circuit_breaker_creates_qualifying_event(manager):
     """
-    At least 1 initial trade fails AND at least 1 reversal trade fails on the same trading day:
-    Triggers daily shutdown, blocks new trade budgets, and creates qualifying shutdown event.
+    Reversal trade failure trips 12-hour shutdown, blocks budgets,
+    and creates qualifying shutdown event for Option B reserve activation.
     """
     day = "2026-11-01"
-    # 1. Initial trade fails
+    # 1. Initial trade fails (does NOT trip shutdown)
     manager.process_settlement(
         settlement_id="settle-init-loss",
         net_pnl_usd=-1.0,
@@ -101,7 +107,7 @@ def test_conjunctive_both_failures_on_same_day_triggers_shutdown(manager):
     )
     assert manager.state.daily_shutdown_status is False
 
-    # 2. Reversal trade fails on same day
+    # 2. Reversal trade fails -> trips 12h shutdown immediately
     manager.process_settlement(
         settlement_id="settle-rev-loss",
         net_pnl_usd=-5.0,
@@ -109,13 +115,12 @@ def test_conjunctive_both_failures_on_same_day_triggers_shutdown(manager):
         signal_type="REVERSAL",
     )
 
-    # Conjunctive condition met!
     assert manager.state.daily_failed_initial_count == 1
     assert manager.state.daily_failed_reversal_count == 1
     assert manager.state.daily_shutdown_status is True
     assert manager.state.daily_shutdown_trading_day == day
     assert manager.state.next_day_activation_eligible is True
-    assert "Conjunctive failure triggered" in manager.state.daily_shutdown_reason
+    assert "Reversal loss circuit breaker tripped" in manager.state.daily_shutdown_reason
 
     # Sizing returns 0, 0
     init_b, rev_b = manager.get_trade_budgets(day)
@@ -126,32 +131,8 @@ def test_conjunctive_both_failures_on_same_day_triggers_shutdown(manager):
     event = manager.ledger.get_unactivated_shutdown_event()
     assert event is not None
     assert event["trading_day"] == day
-    assert event["failed_initial_count"] == 1
     assert event["failed_reversal_count"] == 1
     assert event["activated"] == 0
-
-
-def test_failures_on_different_days_do_not_trigger_shutdown(tmp_ledger):
-    """
-    Initial fails on Day 1, Reversal fails on Day 2:
-    Since they belong to different trading days, conjunctive rule does NOT fire.
-    """
-    mgr = CapitalManager(ledger=tmp_ledger, starting_equity_usd=11.0)
-    day1 = "2026-11-01"
-    day2 = "2026-11-02"
-
-    # Day 1: Initial fails
-    mgr.process_settlement("init-day1", -1.0, trading_day=day1, signal_type="INITIAL")
-    assert mgr.state.daily_failed_initial_count == 1
-    assert mgr.state.daily_shutdown_status is False
-
-    # Day 2: Reversal fails
-    mgr.process_settlement("rev-day2", -5.0, trading_day=day2, signal_type="REVERSAL")
-    # Day 2 should have 0 initial failures and 1 reversal failure
-    assert mgr.state.daily_failed_initial_count == 0
-    assert mgr.state.daily_failed_reversal_count == 1
-    assert mgr.state.daily_shutdown_status is False
-    assert mgr.is_daily_shutdown_active(day2) is False
 
 
 # --- 2. Restart and Crash Resilience Tests ---
@@ -171,7 +152,7 @@ def test_restart_before_first_failure(tmp_ledger):
 def test_restart_after_initial_failure_only(tmp_ledger):
     """
     After an initial failure only, restarting the bot reloads the exact counter.
-    Subsequent reversal failure then triggers the shutdown.
+    Initial failure alone does not trip shutdown.
     """
     day = "2026-11-01"
     mgr1 = CapitalManager(ledger=tmp_ledger, starting_equity_usd=11.0)
@@ -185,31 +166,22 @@ def test_restart_after_initial_failure_only(tmp_ledger):
     assert mgr2.state.daily_failed_reversal_count == 0
     assert mgr2.state.daily_shutdown_status is False
 
-    # Now reversal fails in the new process session
-    mgr2.process_settlement("rev-1", -5.0, trading_day=day, signal_type="REVERSAL")
-    assert mgr2.state.daily_shutdown_status is True
-    assert mgr2.is_daily_shutdown_active(day) is True
 
-
-def test_restart_after_reversal_failure_only(tmp_ledger):
+def test_restart_after_reversal_failure_preserves_12h_shutdown(tmp_ledger):
     """
-    After a reversal failure only, restarting preserves the counter.
-    Subsequent initial failure triggers the shutdown.
+    After a reversal failure, restarting preserves the 12-hour shutdown until cooldown passes.
     """
     day = "2026-11-01"
     mgr1 = CapitalManager(ledger=tmp_ledger, starting_equity_usd=11.0)
     mgr1.process_settlement("rev-1", -5.0, trading_day=day, signal_type="REVERSAL")
     assert mgr1.state.daily_failed_reversal_count == 1
+    assert mgr1.state.daily_shutdown_status is True
 
     # Simulate restart
     mgr2 = CapitalManager(ledger=tmp_ledger)
-    assert mgr2.state.daily_failed_initial_count == 0
     assert mgr2.state.daily_failed_reversal_count == 1
-    assert mgr2.state.daily_shutdown_status is False
-
-    # Initial fails
-    mgr2.process_settlement("init-1", -1.0, trading_day=day, signal_type="INITIAL")
     assert mgr2.state.daily_shutdown_status is True
+    assert mgr2.is_daily_shutdown_active(day) is True
 
 
 def test_restart_after_shutdown_triggered_cannot_be_bypassed(tmp_ledger):
@@ -219,7 +191,6 @@ def test_restart_after_shutdown_triggered_cannot_be_bypassed(tmp_ledger):
     """
     day = "2026-11-01"
     mgr1 = CapitalManager(ledger=tmp_ledger, starting_equity_usd=11.0)
-    mgr1.process_settlement("init-1", -1.0, trading_day=day, signal_type="INITIAL")
     mgr1.process_settlement("rev-1", -5.0, trading_day=day, signal_type="REVERSAL")
     assert mgr1.state.daily_shutdown_status is True
 
@@ -234,28 +205,31 @@ def test_restart_after_shutdown_triggered_cannot_be_bypassed(tmp_ledger):
     assert rev_b == 0
 
 
-def test_daily_boundary_rollover_resets_shutdown_for_new_day(tmp_ledger):
+def test_12_hour_cooldown_resumes_trading_automatically(tmp_ledger):
     """
-    When the next trading day arrives:
-    - Daily shutdown deactivates for the new day.
+    When the 12-hour cooldown elapses:
+    - Daily shutdown automatically deactivates.
     - Daily failure counters reset to 0.
-    - Qualifying shutdown event from yesterday remains in SQLite for Option B reserve activation.
+    - Sizing is unblocked for trading.
     """
     day1 = "2026-11-01"
     day2 = "2026-11-02"
 
     mgr = CapitalManager(ledger=tmp_ledger, starting_equity_usd=22.0)
-    mgr.process_settlement("init-1", -1.0, trading_day=day1, signal_type="INITIAL")
+    now = time.time()
     mgr.process_settlement("rev-1", -5.0, trading_day=day1, signal_type="REVERSAL")
-    assert mgr.is_daily_shutdown_active(day1) is True
+    assert mgr.is_daily_shutdown_active(day1, current_ts=now) is True
 
-    # Day 2 arrives
-    assert mgr.is_daily_shutdown_active(day2) is False
-    assert mgr.state.daily_failed_initial_count == 0
+    # While still in 12-hour window (e.g. 6 hours in) -> still active
+    assert mgr.is_daily_shutdown_active(day1, current_ts=now + 6 * 3600) is True
+
+    # Once 12 hours have elapsed (e.g. 12.1 hours later) -> automatically resumes!
+    future_ts = now + 12.1 * 3600
+    assert mgr.is_daily_shutdown_active(day2, current_ts=future_ts) is False
+    assert mgr.state.daily_shutdown_status is False
     assert mgr.state.daily_failed_reversal_count == 0
-    assert mgr.state.daily_failure_trading_day == day2
 
-    # Sizing for Day 2 is unblocked (Active = $16 -> init=$1, rev=$15)
+    # Sizing for Day 2 is unblocked (Active = $17 -> init=$2, rev=$15)
     init_b, rev_b = mgr.get_trade_budgets(day2)
     assert init_b > 0
     assert rev_b > 0

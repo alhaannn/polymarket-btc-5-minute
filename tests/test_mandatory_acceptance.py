@@ -230,12 +230,11 @@ def test_acceptance_7_single_failure_only(tmp_path: Path):
     assert mgr_a.is_daily_shutdown_active(today) is False
     assert mgr_a.state.daily_shutdown_status is False
 
-    # Case B: Reversal failure only
+    # Case B: Reversal failure trips 12-hour shutdown
     mgr_b = CapitalManager(db_path=tmp_path / "test_acc_7b.db", starting_equity_usd=22.0)
     mgr_b.process_settlement("s-7b-1", net_pnl_usd=-5.0, trading_day=today, signal_type="REVERSAL")
-    mgr_b.process_settlement("s-7b-2", net_pnl_usd=-5.0, trading_day=today, signal_type="REVERSAL")
-    assert mgr_b.is_daily_shutdown_active(today) is False
-    assert mgr_b.state.daily_shutdown_status is False
+    assert mgr_b.is_daily_shutdown_active(today) is True
+    assert mgr_b.state.daily_shutdown_status is True
 
 
 # ==============================================================================

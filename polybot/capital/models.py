@@ -46,6 +46,7 @@ class CapitalState:
     daily_failed_reversal_count: int = 0
     daily_failure_trading_day: str = ""
     next_day_activation_eligible: bool = False
+    shutdown_until_ts: Optional[float] = None
     last_activated_shutdown_event_id: Optional[str] = None
     last_activation_trading_day: Optional[str] = None
     last_processed_settlement_id: Optional[str] = None
@@ -100,6 +101,7 @@ class CapitalState:
             "daily_failed_reversal_count": self.daily_failed_reversal_count,
             "daily_failure_trading_day": self.daily_failure_trading_day,
             "next_day_activation_eligible": self.next_day_activation_eligible,
+            "shutdown_until_ts": self.shutdown_until_ts,
             "last_activated_shutdown_event_id": self.last_activated_shutdown_event_id,
             "last_activation_trading_day": self.last_activation_trading_day,
             "last_processed_settlement_id": self.last_processed_settlement_id,

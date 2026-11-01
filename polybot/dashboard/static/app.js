@@ -628,10 +628,18 @@ function renderCapital(cap) {
   const shutdownEl = document.getElementById('val-cap-shutdown-status');
   if (shutdownEl) {
     if (cap.daily_shutdown_status) {
-      shutdownEl.textContent = `SHUTDOWN ACTIVE (${cap.daily_shutdown_reason || 'Conjunctive failure'})`;
+      const nowSec = Date.now() / 1000;
+      if (cap.shutdown_until_ts && cap.shutdown_until_ts > nowSec) {
+        const remainingSec = Math.max(0, cap.shutdown_until_ts - nowSec);
+        const hours = Math.floor(remainingSec / 3600);
+        const mins = Math.floor((remainingSec % 3600) / 60);
+        shutdownEl.textContent = `SHUTDOWN ACTIVE (Halting 12h • Resumes in ${hours}h ${mins}m)`;
+      } else {
+        shutdownEl.textContent = `SHUTDOWN ACTIVE (${cap.daily_shutdown_reason || 'Reversal failed'})`;
+      }
       shutdownEl.style.color = 'var(--color-red)';
     } else {
-      shutdownEl.textContent = `CLEAR (Init: ${cap.daily_failed_initial_count || 0}/1, Rev: ${cap.daily_failed_reversal_count || 0}/1)`;
+      shutdownEl.textContent = `CLEAR (Rev: ${cap.daily_failed_reversal_count || 0}/1)`;
       shutdownEl.style.color = 'var(--text-primary)';
     }
   }

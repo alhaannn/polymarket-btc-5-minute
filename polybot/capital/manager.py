@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from polybot.capital.ledger import CapitalLedger
 from polybot.capital.models import CapitalState, CapitalTransaction, TransactionType
-from polybot.tz import ist_today_str
+from polybot.tz import ist_today_str, ist_time_str
 
 log = logging.getLogger("polybot.capital.manager")
 
@@ -95,36 +95,60 @@ class CapitalManager:
         log.info("[CAPITAL_INITIALIZED] tx_id=%s Initialized starting capital: Active=$%.2f, Protected=$0.00, Total=$%.2f",
                  tx.tx_id, self.state.active_capital, self.state.total_equity)
 
-    def check_day_rollover(self, current_trading_day: Optional[str] = None) -> None:
+    def check_day_rollover(
+        self,
+        current_trading_day: Optional[str] = None,
+        current_ts: Optional[float] = None,
+    ) -> None:
         """
         Evaluates day boundary and rolls over daily failure counters.
-        If a new trading day begins, daily failure counters reset to 0.
-        If a previous day's shutdown was active, it is deactivated for the new day.
+        If a 12-hour cooling shutdown has elapsed, clears the shutdown and resumes live trading.
+        If a new trading day begins outside an active cooling period, counters reset to 0.
         """
-        today = current_trading_day or ist_today_str()
-        if self.state.daily_failure_trading_day != today:
+        now = current_ts if current_ts is not None else time.time()
+        today = current_trading_day or ist_today_str(now)
+
+        # 1. Check if 12-hour shutdown cooldown has completed
+        if self.state.daily_shutdown_status and self.state.shutdown_until_ts is not None:
+            if now >= self.state.shutdown_until_ts:
+                log.info(
+                    "[SHUTDOWN_COOLDOWN_COMPLETE] 12-hour cooling halt elapsed at %s (until was %s). "
+                    "Resuming trading for day %s.",
+                    ist_time_str(now), ist_time_str(self.state.shutdown_until_ts), today,
+                )
+                self.state.daily_shutdown_status = False
+                self.state.daily_shutdown_reason = ""
+                self.state.shutdown_until_ts = None
+                self.state.daily_failed_reversal_count = 0
+                self.state.daily_failure_trading_day = today
+
+        # 2. Check standard day rollover if not actively cooling down
+        if self.state.daily_failure_trading_day != today and not self.state.daily_shutdown_status:
             log.info("Day rollover detected: %s -> %s. Resetting daily failure counters.",
                      self.state.daily_failure_trading_day, today)
             self.state.daily_failed_initial_count = 0
             self.state.daily_failed_reversal_count = 0
             self.state.daily_failure_trading_day = today
-            if self.state.daily_shutdown_status and self.state.daily_shutdown_trading_day != today:
-                log.info("Deactivating daily shutdown from prior day %s for new day %s",
-                         self.state.daily_shutdown_trading_day, today)
-                self.state.daily_shutdown_status = False
-                self.state.daily_shutdown_reason = ""
 
-    def is_daily_shutdown_active(self, current_trading_day: Optional[str] = None) -> bool:
+    def is_daily_shutdown_active(
+        self,
+        current_trading_day: Optional[str] = None,
+        current_ts: Optional[float] = None,
+    ) -> bool:
         """
-        Returns True if the existing conjunctive daily shutdown is currently active
-        for the given trading day.
+        Returns True if the 12-hour reversal loss cooling halt is currently active.
+        Automatically clears and resumes trading once 12 hours have passed.
         """
-        self.check_day_rollover(current_trading_day)
-        today = current_trading_day or ist_today_str()
-        return bool(
-            self.state.daily_shutdown_status
-            and self.state.daily_shutdown_trading_day == today
-        )
+        self.check_day_rollover(current_trading_day, current_ts)
+        now = current_ts if current_ts is not None else time.time()
+
+        if self.state.daily_shutdown_status:
+            if self.state.shutdown_until_ts is not None:
+                return now < self.state.shutdown_until_ts
+            today = current_trading_day or ist_today_str(now)
+            return self.state.daily_shutdown_trading_day == today
+
+        return False
 
     def is_trading_blocked(self, current_trading_day: Optional[str] = None) -> Tuple[bool, str]:
         """
@@ -444,33 +468,35 @@ class CapitalManager:
                 log.info("[LOSS_DEDUCTED] tx_id=%s Settlement=%s Loss=-$%.2f | Active=$%.2f, Protected=$%.2f, Total=$%.2f",
                          tx_loss.tx_id, settlement_id, abs(net_pnl_usd), self.state.active_capital, self.state.protected_capital, self.state.total_equity)
 
-        # Daily Failure Tracking & Conjunctive Shutdown Trigger (Roadmap Phase 5)
+        # Daily Failure Tracking & Reversal Loss Circuit Breaker
         if net_pnl_cents < 0 and signal_type:
             sig_upper = signal_type.upper()
             if sig_upper == "INITIAL":
+                # Initial trade losses do NOT trigger shutdown
                 self.state.daily_failed_initial_count += 1
-                log.info("Recorded failed INITIAL trade #%d for day %s",
+                log.info("Recorded failed INITIAL trade #%d for day %s (initial losses do not trigger shutdown)",
                          self.state.daily_failed_initial_count, day_key)
             elif sig_upper == "REVERSAL":
                 self.state.daily_failed_reversal_count += 1
-                log.info("Recorded failed REVERSAL trade #%d for day %s",
-                         self.state.daily_failed_reversal_count, day_key)
+                log.warning("Recorded failed REVERSAL trade #%d for day %s",
+                            self.state.daily_failed_reversal_count, day_key)
 
-            # Check existing conjunctive condition:
-            # failed_initial_count >= 1 AND failed_reversal_count >= 1 on same day
-            if (self.state.daily_failed_initial_count >= 1 and
-                self.state.daily_failed_reversal_count >= 1 and
-                not self.state.daily_shutdown_status):
-                shutdown_reason = (
-                    f"Conjunctive failure triggered: {self.state.daily_failed_initial_count} initial and "
-                    f"{self.state.daily_failed_reversal_count} reversal trade(s) failed on {day_key}"
-                )
-                self.record_daily_shutdown_qualifying_event(
-                    trading_day=day_key,
-                    failed_initial_count=self.state.daily_failed_initial_count,
-                    failed_reversal_count=self.state.daily_failed_reversal_count,
-                    reason=shutdown_reason,
-                )
+                # Single reversal loss trips 12-hour shutdown (Rev: 0/1 -> 1/1)
+                if self.state.daily_failed_reversal_count >= 1 and not self.state.daily_shutdown_status:
+                    now = time.time()
+                    shutdown_until = now + (12 * 3600.0)  # Exactly 12 hours
+                    shutdown_reason = (
+                        f"Reversal loss circuit breaker tripped on {day_key}: "
+                        f"Reversal trade failed. Trading halted for 12 hours until "
+                        f"{ist_time_str(shutdown_until)} IST."
+                    )
+                    self.record_daily_shutdown_qualifying_event(
+                        trading_day=day_key,
+                        failed_initial_count=self.state.daily_failed_initial_count,
+                        failed_reversal_count=self.state.daily_failed_reversal_count,
+                        shutdown_until_ts=shutdown_until,
+                        reason=shutdown_reason,
+                    )
 
         self.state.last_processed_settlement_id = settlement_id
         self.verify_invariants()
@@ -491,16 +517,18 @@ class CapitalManager:
         trading_day: str,
         failed_initial_count: int,
         failed_reversal_count: int,
-        reason: str = "Conjunctive failure: at least 1 Initial and 1 Reversal failed on same day",
+        shutdown_until_ts: Optional[float] = None,
+        reason: str = "Reversal loss circuit breaker: 12-hour trading halt active",
     ) -> Optional[str]:
         """
-        Records the existing daily shutdown condition firing.
+        Records the reversal loss circuit breaker firing.
         Persists qualification for Option B next-day protected reserve activation.
         """
         event_id = f"shutdown-{trading_day}"
         self.state.daily_shutdown_status = True
         self.state.daily_shutdown_reason = reason
         self.state.daily_shutdown_trading_day = trading_day
+        self.state.shutdown_until_ts = shutdown_until_ts if shutdown_until_ts is not None else (time.time() + 12 * 3600.0)
         self.state.next_day_activation_eligible = True
 
         shutdown_record = {
@@ -552,7 +580,9 @@ class CapitalManager:
         shutdown_day = unactivated_event["trading_day"]
         event_id = unactivated_event["event_id"]
 
-        if today <= shutdown_day:
+        now = time.time()
+        cooldown_done = (self.state.shutdown_until_ts is not None and now >= self.state.shutdown_until_ts) or (not self.state.daily_shutdown_status and self.state.daily_failure_trading_day != shutdown_day)
+        if today <= shutdown_day and not cooldown_done:
             return False, 0.0, f"Cannot activate reserve on or before shutdown day ({shutdown_day})"
 
         if self.state.protected_capital_cents <= 0:
