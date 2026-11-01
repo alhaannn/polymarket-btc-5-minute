@@ -59,6 +59,17 @@ class PaperExecutionEngine(ExecutionEngine):
                 return True
         return False
 
+    def cancel_pending_orders(self) -> int:
+        """Cancels all unfilled pending orders upon shutdown while preserving open positions."""
+        cancelled = 0
+        for o in list(self.pending_orders):
+            o.status = "CANCELLED"
+            self.pending_orders.remove(o)
+            cancelled += 1
+        if cancelled > 0:
+            log.info("Cancelled %d unfilled pending orders on shutdown", cancelled)
+        return cancelled
+
     def process_pending_orders(
         self,
         current_ts: float,

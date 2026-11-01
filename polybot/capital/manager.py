@@ -49,16 +49,21 @@ class CapitalManager:
     def _initialize_starting_capital(self, starting_equity_usd: float) -> None:
         """Initializes canonical starting capital ($11.00 default = 1100 cents)."""
         cents = int(round(starting_equity_usd * 100))
+        today = time.strftime("%Y-%m-%d")
         self.state = CapitalState(
             total_equity_cents=cents,
             active_capital_cents=cents,
             protected_capital_cents=0,
             realized_profit_cents=0,
             realized_loss_cents=0,
+            active_shortfall_cents=0,
             milestone_44_activated=False,
             daily_shutdown_status=False,
             daily_shutdown_reason="",
             daily_shutdown_trading_day="",
+            daily_failed_initial_count=0,
+            daily_failed_reversal_count=0,
+            daily_failure_trading_day=today,
             next_day_activation_eligible=False,
             updated_at_ts=time.time(),
         )
@@ -73,13 +78,44 @@ class CapitalManager:
             total_before_cents=0,
             total_after_cents=cents,
             fee_cents=0,
-            trading_day=time.strftime("%Y-%m-%d"),
+            trading_day=today,
             reason=f"Canonical starting capital initialized at ${starting_equity_usd:.2f}",
             idempotency_key="initial-capital-deposit",
         )
         self.ledger.save_state_and_transaction(self.state, tx)
         log.info("Initialized starting capital: Active=$%.2f, Protected=$0.00, Total=$%.2f",
                  self.state.active_capital, self.state.total_equity)
+
+    def check_day_rollover(self, current_trading_day: Optional[str] = None) -> None:
+        """
+        Evaluates day boundary and rolls over daily failure counters.
+        If a new trading day begins, daily failure counters reset to 0.
+        If a previous day's shutdown was active, it is deactivated for the new day.
+        """
+        today = current_trading_day or time.strftime("%Y-%m-%d")
+        if self.state.daily_failure_trading_day != today:
+            log.info("Day rollover detected: %s -> %s. Resetting daily failure counters.",
+                     self.state.daily_failure_trading_day, today)
+            self.state.daily_failed_initial_count = 0
+            self.state.daily_failed_reversal_count = 0
+            self.state.daily_failure_trading_day = today
+            if self.state.daily_shutdown_status and self.state.daily_shutdown_trading_day != today:
+                log.info("Deactivating daily shutdown from prior day %s for new day %s",
+                         self.state.daily_shutdown_trading_day, today)
+                self.state.daily_shutdown_status = False
+                self.state.daily_shutdown_reason = ""
+
+    def is_daily_shutdown_active(self, current_trading_day: Optional[str] = None) -> bool:
+        """
+        Returns True if the existing conjunctive daily shutdown is currently active
+        for the given trading day.
+        """
+        self.check_day_rollover(current_trading_day)
+        today = current_trading_day or time.strftime("%Y-%m-%d")
+        return bool(
+            self.state.daily_shutdown_status
+            and self.state.daily_shutdown_trading_day == today
+        )
 
     def verify_invariants(self) -> Tuple[bool, List[str]]:
         """
@@ -111,13 +147,18 @@ class CapitalManager:
 
         return True, violations
 
-    def get_trade_budgets(self) -> Tuple[int, int]:
+    def get_trade_budgets(self, current_trading_day: Optional[str] = None) -> Tuple[int, int]:
         """
         Calculates whole-dollar order budgets based on current active capital:
         - Initial budget = round(Active / 11)
         - Reversal budget = round((Active * 10) / 11)
-        If an active shortfall exists, returns 0, 0 (trading halted until shortfall resolved).
+        If an active shortfall exists or daily shutdown is active, returns 0, 0 (trading halted).
         """
+        if self.is_daily_shutdown_active(current_trading_day):
+            log.warning("Daily shutdown active for %s. New trade budgets set to $0.",
+                        self.state.daily_shutdown_trading_day)
+            return 0, 0
+
         if self.state.active_shortfall_cents > 0:
             log.warning("Active shortfall exists ($%.2f). New trade budgets set to $0.", self.state.active_shortfall)
             return 0, 0
@@ -140,6 +181,7 @@ class CapitalManager:
         net_pnl_usd: float,
         fee_usd: float = 0.0,
         trading_day: Optional[str] = None,
+        signal_type: Optional[str] = None,
     ) -> CapitalState:
         """
         Applies settlement net P&L to capital pools according to canonical rules.
@@ -153,6 +195,11 @@ class CapitalManager:
         If a realized loss exceeds active capital, active capital is floored at 0,
         the shortfall is recorded in `active_shortfall_cents`, and protected capital
         is strictly untouched.
+
+        Phase 5 Daily Shutdown:
+        If a trade fails (net_pnl_cents < 0) and both failed_initial_count >= 1
+        and failed_reversal_count >= 1 on the same trading day, triggers the existing
+        conjunctive shutdown rule.
         """
         # 1. Idempotency check
         if self.ledger.is_settlement_processed(settlement_id):
@@ -160,6 +207,7 @@ class CapitalManager:
             return self.state
 
         day_key = trading_day or time.strftime("%Y-%m-%d")
+        self.check_day_rollover(day_key)
         net_pnl_cents = int(round(net_pnl_usd * 100))
         fee_cents = int(round(fee_usd * 100))
 
@@ -368,6 +416,34 @@ class CapitalManager:
                     idempotency_key=f"settle-{settlement_id}",
                 )
                 tx_list.append(tx_loss)
+
+        # Daily Failure Tracking & Conjunctive Shutdown Trigger (Roadmap Phase 5)
+        if net_pnl_cents < 0 and signal_type:
+            sig_upper = signal_type.upper()
+            if sig_upper == "INITIAL":
+                self.state.daily_failed_initial_count += 1
+                log.info("Recorded failed INITIAL trade #%d for day %s",
+                         self.state.daily_failed_initial_count, day_key)
+            elif sig_upper == "REVERSAL":
+                self.state.daily_failed_reversal_count += 1
+                log.info("Recorded failed REVERSAL trade #%d for day %s",
+                         self.state.daily_failed_reversal_count, day_key)
+
+            # Check existing conjunctive condition:
+            # failed_initial_count >= 1 AND failed_reversal_count >= 1 on same day
+            if (self.state.daily_failed_initial_count >= 1 and
+                self.state.daily_failed_reversal_count >= 1 and
+                not self.state.daily_shutdown_status):
+                shutdown_reason = (
+                    f"Conjunctive failure triggered: {self.state.daily_failed_initial_count} initial and "
+                    f"{self.state.daily_failed_reversal_count} reversal trade(s) failed on {day_key}"
+                )
+                self.record_daily_shutdown_qualifying_event(
+                    trading_day=day_key,
+                    failed_initial_count=self.state.daily_failed_initial_count,
+                    failed_reversal_count=self.state.daily_failed_reversal_count,
+                    reason=shutdown_reason,
+                )
 
         self.state.last_processed_settlement_id = settlement_id
         self.verify_invariants()

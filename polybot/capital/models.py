@@ -42,6 +42,9 @@ class CapitalState:
     daily_shutdown_status: bool = False
     daily_shutdown_reason: str = ""
     daily_shutdown_trading_day: str = ""
+    daily_failed_initial_count: int = 0
+    daily_failed_reversal_count: int = 0
+    daily_failure_trading_day: str = ""
     next_day_activation_eligible: bool = False
     last_activated_shutdown_event_id: Optional[str] = None
     last_activation_trading_day: Optional[str] = None
@@ -89,6 +92,9 @@ class CapitalState:
             "daily_shutdown_status": self.daily_shutdown_status,
             "daily_shutdown_reason": self.daily_shutdown_reason,
             "daily_shutdown_trading_day": self.daily_shutdown_trading_day,
+            "daily_failed_initial_count": self.daily_failed_initial_count,
+            "daily_failed_reversal_count": self.daily_failed_reversal_count,
+            "daily_failure_trading_day": self.daily_failure_trading_day,
             "next_day_activation_eligible": self.next_day_activation_eligible,
             "last_activated_shutdown_event_id": self.last_activated_shutdown_event_id,
             "last_activation_trading_day": self.last_activation_trading_day,

@@ -50,6 +50,9 @@ class CapitalLedger:
                     daily_shutdown_status INTEGER NOT NULL DEFAULT 0,
                     daily_shutdown_reason TEXT NOT NULL DEFAULT '',
                     daily_shutdown_trading_day TEXT NOT NULL DEFAULT '',
+                    daily_failed_initial_count INTEGER NOT NULL DEFAULT 0,
+                    daily_failed_reversal_count INTEGER NOT NULL DEFAULT 0,
+                    daily_failure_trading_day TEXT NOT NULL DEFAULT '',
                     next_day_activation_eligible INTEGER NOT NULL DEFAULT 0,
                     last_activated_shutdown_event_id TEXT,
                     last_activation_trading_day TEXT,
@@ -59,10 +62,16 @@ class CapitalLedger:
                 )
             """)
 
-            # Schema migration: ensure active_shortfall_cents column exists
+            # Schema migration: ensure new columns exist in existing databases
             cols = [col[1] for col in conn.execute("PRAGMA table_info(capital_state)").fetchall()]
             if "active_shortfall_cents" not in cols:
                 conn.execute("ALTER TABLE capital_state ADD COLUMN active_shortfall_cents INTEGER NOT NULL DEFAULT 0")
+            if "daily_failed_initial_count" not in cols:
+                conn.execute("ALTER TABLE capital_state ADD COLUMN daily_failed_initial_count INTEGER NOT NULL DEFAULT 0")
+            if "daily_failed_reversal_count" not in cols:
+                conn.execute("ALTER TABLE capital_state ADD COLUMN daily_failed_reversal_count INTEGER NOT NULL DEFAULT 0")
+            if "daily_failure_trading_day" not in cols:
+                conn.execute("ALTER TABLE capital_state ADD COLUMN daily_failure_trading_day TEXT NOT NULL DEFAULT ''")
 
             # 2. Immutable transaction history table
             conn.execute("""
@@ -129,6 +138,9 @@ class CapitalLedger:
                 daily_shutdown_status=bool(row["daily_shutdown_status"]),
                 daily_shutdown_reason=row["daily_shutdown_reason"],
                 daily_shutdown_trading_day=row["daily_shutdown_trading_day"],
+                daily_failed_initial_count=row["daily_failed_initial_count"] if "daily_failed_initial_count" in row_keys else 0,
+                daily_failed_reversal_count=row["daily_failed_reversal_count"] if "daily_failed_reversal_count" in row_keys else 0,
+                daily_failure_trading_day=row["daily_failure_trading_day"] if "daily_failure_trading_day" in row_keys else "",
                 next_day_activation_eligible=bool(row["next_day_activation_eligible"]),
                 last_activated_shutdown_event_id=row["last_activated_shutdown_event_id"],
                 last_activation_trading_day=row["last_activation_trading_day"],
@@ -156,11 +168,13 @@ class CapitalLedger:
                     id, total_equity_cents, active_capital_cents, protected_capital_cents,
                     realized_profit_cents, realized_loss_cents, active_shortfall_cents,
                     milestone_44_activated, daily_shutdown_status, daily_shutdown_reason,
-                    daily_shutdown_trading_day, next_day_activation_eligible,
-                    last_activated_shutdown_event_id, last_activation_trading_day,
-                    last_processed_settlement_id, capital_ledger_version, updated_at_ts
+                    daily_shutdown_trading_day, daily_failed_initial_count,
+                    daily_failed_reversal_count, daily_failure_trading_day,
+                    next_day_activation_eligible, last_activated_shutdown_event_id,
+                    last_activation_trading_day, last_processed_settlement_id,
+                    capital_ledger_version, updated_at_ts
                 ) VALUES (
-                    1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 )
             """, (
                 state.total_equity_cents,
@@ -173,6 +187,9 @@ class CapitalLedger:
                 1 if state.daily_shutdown_status else 0,
                 state.daily_shutdown_reason,
                 state.daily_shutdown_trading_day,
+                state.daily_failed_initial_count,
+                state.daily_failed_reversal_count,
+                state.daily_failure_trading_day,
                 1 if state.next_day_activation_eligible else 0,
                 state.last_activated_shutdown_event_id,
                 state.last_activation_trading_day,

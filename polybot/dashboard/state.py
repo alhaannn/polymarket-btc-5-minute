@@ -57,6 +57,9 @@ class DashboardState:
             "milestone_44_activated": False,
             "daily_shutdown_status": False,
             "daily_shutdown_reason": "",
+            "daily_shutdown_trading_day": "",
+            "daily_failed_initial_count": 0,
+            "daily_failed_reversal_count": 0,
         }
 
         # Control signals requested from UI

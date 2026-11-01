@@ -355,6 +355,16 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
                     stake_usd = sig.cost_usd
                     risk.sync_open_exposure(engine.get_open_exposure())
 
+                    today = time.strftime("%Y-%m-%d")
+
+                    # Daily shutdown halt (Roadmap Phase 5)
+                    if capital_mgr.is_daily_shutdown_active(today):
+                        if hasattr(strat, "on_order_rejected"):
+                            strat.on_order_rejected(sig.signal_type)
+                        log.warning("Order blocked: Daily shutdown active for %s (%s)", today, capital_mgr.state.daily_shutdown_reason)
+                        dash_state.add_log("SHUTDOWN", f"Daily shutdown active: {capital_mgr.state.daily_shutdown_reason}")
+                        continue
+
                     # Shortfall safety halt
                     if capital_mgr.state.active_shortfall_cents > 0:
                         if hasattr(strat, "on_order_rejected"):
@@ -439,7 +449,7 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
                     for settled_pos in settled_positions:
                         risk.record_trade_settled(settled_pos.realized_pnl_usd, settled_pos.total_cost_usd, current_window_idx)
 
-                        # Capital Ledger Settlement Hook (Roadmap Phase 4)
+                        # Capital Ledger Settlement Hook (Roadmap Phase 4 & 5)
                         settle_id = f"settle-{slug}-{settled_pos.order_id or settled_pos.position_id or int(now * 1000)}"
                         try:
                             capital_mgr.process_settlement(
@@ -447,9 +457,16 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
                                 net_pnl_usd=settled_pos.realized_pnl_usd,
                                 fee_usd=settled_pos.total_fees_usd,
                                 trading_day=time.strftime("%Y-%m-%d"),
+                                signal_type=settled_pos.signal_type,
                             )
                         except Exception as e:
                             log.error("Failed to process capital settlement for %s: %s", settle_id, e)
+
+                        # If daily shutdown triggered, safely cancel pending orders
+                        if capital_mgr.is_daily_shutdown_active():
+                            cancelled_cnt = engine.cancel_pending_orders()
+                            if cancelled_cnt > 0:
+                                log.info("Cancelled %d unfilled pending orders due to daily shutdown", cancelled_cnt)
 
                         dash_state.update_capital(capital_mgr.state.to_dict())
                         dash_state.add_log(
