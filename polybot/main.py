@@ -108,6 +108,7 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
     dash_state = DashboardState()
     dash_state.set_bot_status("RUNNING")
     dash_state.strategy_name = config.strategy.strategy_name
+    dash_state.update_capital(capital_mgr.state.to_dict())
 
     dash_server = None
     if config.dashboard.enabled:
@@ -354,6 +355,14 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
                     stake_usd = sig.cost_usd
                     risk.sync_open_exposure(engine.get_open_exposure())
 
+                    # Shortfall safety halt
+                    if capital_mgr.state.active_shortfall_cents > 0:
+                        if hasattr(strat, "on_order_rejected"):
+                            strat.on_order_rejected(sig.signal_type)
+                        log.warning("Order blocked: Active shortfall ($%.2f) exists. Trading halted.", capital_mgr.state.active_shortfall)
+                        dash_state.add_log("WARNING", f"Shortfall halt: ${capital_mgr.state.active_shortfall:.2f}")
+                        continue
+
                     # Pre-trade dynamic budget & free active funds validation
                     b_val = budget_calc.validate_order_budget(
                         signal_type=sig.signal_type,
@@ -429,17 +438,36 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
                     settled_positions = engine.settle_window_all(slug, winner, now)
                     for settled_pos in settled_positions:
                         risk.record_trade_settled(settled_pos.realized_pnl_usd, settled_pos.total_cost_usd, current_window_idx)
+
+                        # Capital Ledger Settlement Hook (Roadmap Phase 4)
+                        settle_id = f"settle-{slug}-{settled_pos.order_id or settled_pos.position_id or int(now * 1000)}"
+                        try:
+                            capital_mgr.process_settlement(
+                                settlement_id=settle_id,
+                                net_pnl_usd=settled_pos.realized_pnl_usd,
+                                fee_usd=settled_pos.total_fees_usd,
+                                trading_day=time.strftime("%Y-%m-%d"),
+                            )
+                        except Exception as e:
+                            log.error("Failed to process capital settlement for %s: %s", settle_id, e)
+
+                        dash_state.update_capital(capital_mgr.state.to_dict())
                         dash_state.add_log(
                             "SETTLED",
-                            f"Settled {slug}: position={settled_pos.side} ({settled_pos.signal_type}) winner={winner} | PnL=${settled_pos.realized_pnl_usd:+.2f}"
+                            f"Settled {slug}: position={settled_pos.side} ({settled_pos.signal_type}) winner={winner} | "
+                            f"PnL=${settled_pos.realized_pnl_usd:+.2f} | Active=${capital_mgr.state.active_capital:.2f} "
+                            f"Prot=${capital_mgr.state.protected_capital:.2f} Total=${capital_mgr.state.total_equity:.2f}"
                         )
                         log.info(
-                            "PAPER POSITION SETTLED %s %s (%s) | PnL=$%+.2f | Total PnL=$%+.2f",
+                            "PAPER POSITION SETTLED %s %s (%s) | PnL=$%+.2f | Total PnL=$%+.2f | Capital: Active=$%.2f Prot=$%.2f Total=$%.2f",
                             slug,
                             settled_pos.side,
                             settled_pos.signal_type,
                             settled_pos.realized_pnl_usd,
                             engine.get_total_realized_pnl(),
+                            capital_mgr.state.active_capital,
+                            capital_mgr.state.protected_capital,
+                            capital_mgr.state.total_equity,
                         )
                     open_trades_to_settle = [it for it in open_trades_to_settle if it["slug"] != slug]
                     risk.sync_open_exposure(engine.get_open_exposure())

@@ -86,17 +86,20 @@ class CapitalManager:
         Validates all canonical capital invariants:
         1. Active capital >= 0
         2. Protected capital >= 0
-        3. Total equity == Active + Protected
-        4. Milestone consistency
+        3. Active shortfall >= 0
+        4. Total equity == Active + Protected
+        5. Milestone consistency (Protected == 0 before $44 milestone)
         """
         violations = []
         if self.state.active_capital_cents < 0:
             violations.append(f"Invariant 1 violated: Active capital is negative ({self.state.active_capital_cents}c)")
         if self.state.protected_capital_cents < 0:
             violations.append(f"Invariant 2 violated: Protected capital is negative ({self.state.protected_capital_cents}c)")
+        if self.state.active_shortfall_cents < 0:
+            violations.append(f"Invariant 3 violated: Active shortfall is negative ({self.state.active_shortfall_cents}c)")
         if self.state.total_equity_cents != (self.state.active_capital_cents + self.state.protected_capital_cents):
             violations.append(
-                f"Invariant 3 violated: Total equity ({self.state.total_equity_cents}c) != "
+                f"Invariant 4 violated: Total equity ({self.state.total_equity_cents}c) != "
                 f"Active ({self.state.active_capital_cents}c) + Protected ({self.state.protected_capital_cents}c)"
             )
         if not self.state.milestone_44_activated and self.state.protected_capital_cents > 0:
@@ -113,7 +116,12 @@ class CapitalManager:
         Calculates whole-dollar order budgets based on current active capital:
         - Initial budget = round(Active / 11)
         - Reversal budget = round((Active * 10) / 11)
+        If an active shortfall exists, returns 0, 0 (trading halted until shortfall resolved).
         """
+        if self.state.active_shortfall_cents > 0:
+            log.warning("Active shortfall exists ($%.2f). New trade budgets set to $0.", self.state.active_shortfall)
+            return 0, 0
+
         active_usd = self.state.active_capital
         if active_usd <= 0.0:
             return 0, 0
@@ -134,8 +142,17 @@ class CapitalManager:
         trading_day: Optional[str] = None,
     ) -> CapitalState:
         """
-        Applies settlement P&L to capital pools according to canonical rules.
+        Applies settlement net P&L to capital pools according to canonical rules.
         Idempotent: Duplicate calls for the same settlement_id are safely ignored.
+
+        Odd-Cent Allocation Policy:
+        When splitting an odd number of cents, `cents // 2` is assigned to Active
+        and `cents - (cents // 2)` to Protected.
+
+        Active Shortfall Handling:
+        If a realized loss exceeds active capital, active capital is floored at 0,
+        the shortfall is recorded in `active_shortfall_cents`, and protected capital
+        is strictly untouched.
         """
         # 1. Idempotency check
         if self.ledger.is_settlement_processed(settlement_id):
@@ -154,81 +171,147 @@ class CapitalManager:
 
         if not self.state.milestone_44_activated:
             # --- PRE-MILESTONE ACCOUNTING ---
-            new_active = active_before + net_pnl_cents
-            new_protected = protected_before  # 0
-            new_total = new_active + new_protected
-
-            self.state.active_capital_cents = max(0, new_active)
-            self.state.total_equity_cents = max(0, new_total)
-
             if net_pnl_cents >= 0:
                 self.state.realized_profit_cents += net_pnl_cents
-            else:
-                self.state.realized_loss_cents += abs(net_pnl_cents)
 
-            tx_pnl = CapitalTransaction(
-                tx_id=f"tx-pnl-{int(time.time() * 1000)}-{uuid.uuid4().hex[:4]}",
-                event_type=TransactionType.PRE_MILESTONE_PNL,
-                amount_cents=net_pnl_cents,
-                active_before_cents=active_before,
-                active_after_cents=self.state.active_capital_cents,
-                protected_before_cents=protected_before,
-                protected_after_cents=protected_before,
-                total_before_cents=total_before,
-                total_after_cents=self.state.total_equity_cents,
-                fee_cents=fee_cents,
-                settlement_id=settlement_id,
-                trading_day=day_key,
-                reason=f"Pre-milestone settlement PnL: ${net_pnl_usd:+.2f}",
-                idempotency_key=f"settle-{settlement_id}",
-            )
-            tx_list.append(tx_pnl)
+                # Recover any active shortfall first
+                if self.state.active_shortfall_cents > 0:
+                    offset = min(net_pnl_cents, self.state.active_shortfall_cents)
+                    self.state.active_shortfall_cents -= offset
+                    remaining_profit = net_pnl_cents - offset
+                    log.info("Settlement %s: Recovered %sc of active shortfall. Remaining shortfall: %sc",
+                             settlement_id, offset, self.state.active_shortfall_cents)
+                else:
+                    remaining_profit = net_pnl_cents
 
-            # Check for $44 Milestone Trigger ($44.00 = 4400 cents)
-            if self.state.total_equity_cents >= 4400:
-                mid_active_before = self.state.active_capital_cents
-                mid_prot_before = self.state.protected_capital_cents
-                mid_tot_before = self.state.total_equity_cents
+                self.state.active_capital_cents += remaining_profit
+                self.state.total_equity_cents = self.state.active_capital_cents + self.state.protected_capital_cents
 
-                # 50/50 split of eligible equity
-                split_active = mid_tot_before // 2
-                split_protected = mid_tot_before - split_active
-
-                self.state.active_capital_cents = split_active
-                self.state.protected_capital_cents = split_protected
-                self.state.milestone_44_activated = True
-
-                tx_milestone = CapitalTransaction(
-                    tx_id=f"tx-ms44-{int(time.time() * 1000)}",
-                    event_type=TransactionType.MILESTONE_44_ACTIVATION,
-                    amount_cents=mid_tot_before,
-                    active_before_cents=mid_active_before,
-                    active_after_cents=split_active,
-                    protected_before_cents=mid_prot_before,
-                    protected_after_cents=split_protected,
-                    total_before_cents=mid_tot_before,
-                    total_after_cents=mid_tot_before,
-                    fee_cents=0,
+                tx_pnl = CapitalTransaction(
+                    tx_id=f"tx-pnl-{int(time.time() * 1000)}-{uuid.uuid4().hex[:4]}",
+                    event_type=TransactionType.PRE_MILESTONE_PNL,
+                    amount_cents=net_pnl_cents,
+                    active_before_cents=active_before,
+                    active_after_cents=self.state.active_capital_cents,
+                    protected_before_cents=protected_before,
+                    protected_after_cents=protected_before,
+                    total_before_cents=total_before,
+                    total_after_cents=self.state.total_equity_cents,
+                    fee_cents=fee_cents,
                     settlement_id=settlement_id,
                     trading_day=day_key,
-                    reason=f"Reached $44 milestone: Split ${mid_tot_before/100:.2f} into Active=${split_active/100:.2f}, Protected=${split_protected/100:.2f}",
-                    idempotency_key=f"milestone-44-{settlement_id}",
+                    reason=f"Pre-milestone settlement profit: +${net_pnl_usd:.2f}",
+                    idempotency_key=f"settle-{settlement_id}",
                 )
-                tx_list.append(tx_milestone)
-                log.info("🎉 $44 MILESTONE ACTIVATED! Active=$%.2f, Protected=$%.2f, Total=$%.2f",
-                         self.state.active_capital, self.state.protected_capital, self.state.total_equity)
+                tx_list.append(tx_pnl)
+
+                # Check for $44 Milestone Trigger ($44.00 = 4400 cents)
+                if self.state.total_equity_cents >= 4400:
+                    mid_active_before = self.state.active_capital_cents
+                    mid_prot_before = self.state.protected_capital_cents
+                    mid_tot_before = self.state.total_equity_cents
+
+                    # 50/50 split of eligible equity (odd-cent policy: protected gets remainder)
+                    split_active = mid_tot_before // 2
+                    split_protected = mid_tot_before - split_active
+
+                    self.state.active_capital_cents = split_active
+                    self.state.protected_capital_cents = split_protected
+                    self.state.milestone_44_activated = True
+
+                    tx_milestone = CapitalTransaction(
+                        tx_id=f"tx-ms44-{int(time.time() * 1000)}",
+                        event_type=TransactionType.MILESTONE_44_ACTIVATION,
+                        amount_cents=mid_tot_before,
+                        active_before_cents=mid_active_before,
+                        active_after_cents=split_active,
+                        protected_before_cents=mid_prot_before,
+                        protected_after_cents=split_protected,
+                        total_before_cents=mid_tot_before,
+                        total_after_cents=mid_tot_before,
+                        fee_cents=0,
+                        settlement_id=settlement_id,
+                        trading_day=day_key,
+                        reason=f"Reached $44 milestone: Split ${mid_tot_before/100:.2f} into Active=${split_active/100:.2f}, Protected=${split_protected/100:.2f}",
+                        idempotency_key=f"milestone-44-{settlement_id}",
+                    )
+                    tx_list.append(tx_milestone)
+                    log.info("🎉 $44 MILESTONE ACTIVATED! Active=$%.2f, Protected=$%.2f, Total=$%.2f",
+                             self.state.active_capital, self.state.protected_capital, self.state.total_equity)
+
+            else:
+                # Pre-milestone loss
+                self.state.realized_loss_cents += abs(net_pnl_cents)
+                new_active = active_before + net_pnl_cents
+                if new_active < 0:
+                    shortfall = abs(new_active)
+                    self.state.active_shortfall_cents += shortfall
+                    self.state.active_capital_cents = 0
+                    self.state.total_equity_cents = 0
+                    log.critical("ACCOUNTING SHORTFALL: Pre-milestone loss %sc exceeds active capital %sc! Shortfall is %sc.",
+                                 abs(net_pnl_cents), active_before, self.state.active_shortfall_cents)
+                else:
+                    self.state.active_capital_cents = new_active
+                    self.state.total_equity_cents = new_active
+
+                tx_loss = CapitalTransaction(
+                    tx_id=f"tx-pnl-{int(time.time() * 1000)}-{uuid.uuid4().hex[:4]}",
+                    event_type=TransactionType.PRE_MILESTONE_PNL,
+                    amount_cents=net_pnl_cents,
+                    active_before_cents=active_before,
+                    active_after_cents=self.state.active_capital_cents,
+                    protected_before_cents=protected_before,
+                    protected_after_cents=protected_before,
+                    total_before_cents=total_before,
+                    total_after_cents=self.state.total_equity_cents,
+                    fee_cents=fee_cents,
+                    settlement_id=settlement_id,
+                    trading_day=day_key,
+                    reason=f"Pre-milestone settlement loss: -${abs(net_pnl_usd):.2f}",
+                    idempotency_key=f"settle-{settlement_id}",
+                )
+                tx_list.append(tx_loss)
 
         else:
             # --- POST-MILESTONE ACCOUNTING ---
             if net_pnl_cents >= 0:
-                # 50% Active / 50% Protected allocation
-                active_share = net_pnl_cents // 2
-                protected_share = net_pnl_cents - active_share
+                self.state.realized_profit_cents += net_pnl_cents
+
+                # Recover any active shortfall first before compounding
+                if self.state.active_shortfall_cents > 0:
+                    offset = min(net_pnl_cents, self.state.active_shortfall_cents)
+                    self.state.active_shortfall_cents -= offset
+                    rem_profit = net_pnl_cents - offset
+
+                    tx_rec = CapitalTransaction(
+                        tx_id=f"tx-rec-{int(time.time() * 1000)}-{uuid.uuid4().hex[:4]}",
+                        event_type=TransactionType.SHORTFALL_RECOVERY,
+                        amount_cents=offset,
+                        active_before_cents=active_before,
+                        active_after_cents=active_before,
+                        protected_before_cents=protected_before,
+                        protected_after_cents=protected_before,
+                        total_before_cents=total_before,
+                        total_after_cents=total_before,
+                        fee_cents=0,
+                        settlement_id=settlement_id,
+                        trading_day=day_key,
+                        reason=f"Shortfall recovery: ${offset/100:.2f} profit absorbed existing active deficit",
+                        idempotency_key=f"shortfall-recovery-{settlement_id}",
+                    )
+                    tx_list.append(tx_rec)
+                    log.info("Settlement %s: Recovered %sc of active shortfall. Remaining shortfall: %sc",
+                             settlement_id, offset, self.state.active_shortfall_cents)
+                else:
+                    rem_profit = net_pnl_cents
+
+                # 50% Active / 50% Protected allocation on remaining profit
+                active_share = rem_profit // 2
+                protected_share = rem_profit - active_share
 
                 self.state.active_capital_cents += active_share
                 self.state.protected_capital_cents += protected_share
-                self.state.total_equity_cents += net_pnl_cents
-                self.state.realized_profit_cents += net_pnl_cents
+                self.state.total_equity_cents = self.state.active_capital_cents + self.state.protected_capital_cents
 
                 tx_profit = CapitalTransaction(
                     tx_id=f"tx-prof-{int(time.time() * 1000)}-{uuid.uuid4().hex[:4]}",
@@ -247,11 +330,26 @@ class CapitalManager:
                     idempotency_key=f"settle-{settlement_id}",
                 )
                 tx_list.append(tx_profit)
+
             else:
                 # Realized losses deduct from active capital ONLY
-                self.state.active_capital_cents = max(0, self.state.active_capital_cents + net_pnl_cents)
-                self.state.total_equity_cents = self.state.active_capital_cents + self.state.protected_capital_cents
                 self.state.realized_loss_cents += abs(net_pnl_cents)
+                new_active = active_before + net_pnl_cents
+
+                if new_active < 0:
+                    shortfall = abs(new_active)
+                    self.state.active_shortfall_cents += shortfall
+                    self.state.active_capital_cents = 0
+                    self.state.total_equity_cents = self.state.protected_capital_cents
+                    log.critical(
+                        "ACCOUNTING SHORTFALL: Post-milestone loss %sc exceeds active capital %sc by %sc! "
+                        "Total shortfall is %sc. Protected capital ($%.2f) remains isolated. Trading halted.",
+                        abs(net_pnl_cents), active_before, shortfall,
+                        self.state.active_shortfall_cents, self.state.protected_capital
+                    )
+                else:
+                    self.state.active_capital_cents = new_active
+                    self.state.total_equity_cents = self.state.active_capital_cents + self.state.protected_capital_cents
 
                 tx_loss = CapitalTransaction(
                     tx_id=f"tx-loss-{int(time.time() * 1000)}-{uuid.uuid4().hex[:4]}",

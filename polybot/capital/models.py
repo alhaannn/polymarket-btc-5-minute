@@ -15,6 +15,7 @@ class TransactionType(str, Enum):
     MILESTONE_44_ACTIVATION = "MILESTONE_44_ACTIVATION"
     PROFIT_ALLOCATION = "PROFIT_ALLOCATION"
     LOSS_DEDUCTION = "LOSS_DEDUCTION"
+    SHORTFALL_RECOVERY = "SHORTFALL_RECOVERY"
     RESERVE_RELEASE_OPTION_B = "RESERVE_RELEASE_OPTION_B"
     RECONCILIATION_ADJUSTMENT = "RECONCILIATION_ADJUSTMENT"
 
@@ -24,12 +25,19 @@ class CapitalState:
     """
     Core state snapshot of attributable capital pools and milestone status.
     All balances are tracked in integer cents (e.g. $11.00 = 1100 cents).
+
+    Odd-Cent Allocation Policy:
+    When splitting odd cents during milestone activation or profit compounding,
+    the active pool receives `amount // 2` cents and the protected pool receives
+    `amount - (amount // 2)` cents. This deterministic policy guarantees exact penny
+    conservation while maintaining a conservative bias toward protected reserve capital.
     """
     total_equity_cents: int = 1100
     active_capital_cents: int = 1100
     protected_capital_cents: int = 0
     realized_profit_cents: int = 0
     realized_loss_cents: int = 0
+    active_shortfall_cents: int = 0
     milestone_44_activated: bool = False
     daily_shutdown_status: bool = False
     daily_shutdown_reason: str = ""
@@ -61,6 +69,10 @@ class CapitalState:
     def realized_loss(self) -> float:
         return round(self.realized_loss_cents / 100.0, 2)
 
+    @property
+    def active_shortfall(self) -> float:
+        return round(self.active_shortfall_cents / 100.0, 2)
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "total_equity": self.total_equity,
@@ -68,9 +80,11 @@ class CapitalState:
             "protected_capital": self.protected_capital,
             "realized_profit": self.realized_profit,
             "realized_loss": self.realized_loss,
+            "active_shortfall": self.active_shortfall,
             "total_equity_cents": self.total_equity_cents,
             "active_capital_cents": self.active_capital_cents,
             "protected_capital_cents": self.protected_capital_cents,
+            "active_shortfall_cents": self.active_shortfall_cents,
             "milestone_44_activated": self.milestone_44_activated,
             "daily_shutdown_status": self.daily_shutdown_status,
             "daily_shutdown_reason": self.daily_shutdown_reason,

@@ -5,11 +5,12 @@ and shutdown activation events.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 import logging
 import sqlite3
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from polybot.capital.models import CapitalState, CapitalTransaction, TransactionType
 
@@ -24,10 +25,14 @@ class CapitalLedger:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
-    def _get_connection(self) -> sqlite3.Connection:
+    @contextmanager
+    def _get_connection(self):
         conn = sqlite3.connect(str(self.db_path), timeout=15.0)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            yield conn
+        finally:
+            conn.close()
 
     def _init_db(self) -> None:
         with self._get_connection() as conn:
@@ -40,6 +45,7 @@ class CapitalLedger:
                     protected_capital_cents INTEGER NOT NULL,
                     realized_profit_cents INTEGER NOT NULL,
                     realized_loss_cents INTEGER NOT NULL,
+                    active_shortfall_cents INTEGER NOT NULL DEFAULT 0,
                     milestone_44_activated INTEGER NOT NULL DEFAULT 0,
                     daily_shutdown_status INTEGER NOT NULL DEFAULT 0,
                     daily_shutdown_reason TEXT NOT NULL DEFAULT '',
@@ -52,6 +58,11 @@ class CapitalLedger:
                     updated_at_ts REAL NOT NULL
                 )
             """)
+
+            # Schema migration: ensure active_shortfall_cents column exists
+            cols = [col[1] for col in conn.execute("PRAGMA table_info(capital_state)").fetchall()]
+            if "active_shortfall_cents" not in cols:
+                conn.execute("ALTER TABLE capital_state ADD COLUMN active_shortfall_cents INTEGER NOT NULL DEFAULT 0")
 
             # 2. Immutable transaction history table
             conn.execute("""
@@ -106,12 +117,14 @@ class CapitalLedger:
             row = conn.execute("SELECT * FROM capital_state WHERE id = 1").fetchone()
             if not row:
                 return None
+            row_keys = row.keys()
             return CapitalState(
                 total_equity_cents=row["total_equity_cents"],
                 active_capital_cents=row["active_capital_cents"],
                 protected_capital_cents=row["protected_capital_cents"],
                 realized_profit_cents=row["realized_profit_cents"],
                 realized_loss_cents=row["realized_loss_cents"],
+                active_shortfall_cents=row["active_shortfall_cents"] if "active_shortfall_cents" in row_keys else 0,
                 milestone_44_activated=bool(row["milestone_44_activated"]),
                 daily_shutdown_status=bool(row["daily_shutdown_status"]),
                 daily_shutdown_reason=row["daily_shutdown_reason"],
@@ -141,13 +154,13 @@ class CapitalLedger:
             conn.execute("""
                 INSERT OR REPLACE INTO capital_state (
                     id, total_equity_cents, active_capital_cents, protected_capital_cents,
-                    realized_profit_cents, realized_loss_cents, milestone_44_activated,
-                    daily_shutdown_status, daily_shutdown_reason, daily_shutdown_trading_day,
-                    next_day_activation_eligible, last_activated_shutdown_event_id,
-                    last_activation_trading_day, last_processed_settlement_id,
-                    capital_ledger_version, updated_at_ts
+                    realized_profit_cents, realized_loss_cents, active_shortfall_cents,
+                    milestone_44_activated, daily_shutdown_status, daily_shutdown_reason,
+                    daily_shutdown_trading_day, next_day_activation_eligible,
+                    last_activated_shutdown_event_id, last_activation_trading_day,
+                    last_processed_settlement_id, capital_ledger_version, updated_at_ts
                 ) VALUES (
-                    1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 )
             """, (
                 state.total_equity_cents,
@@ -155,6 +168,7 @@ class CapitalLedger:
                 state.protected_capital_cents,
                 state.realized_profit_cents,
                 state.realized_loss_cents,
+                state.active_shortfall_cents,
                 1 if state.milestone_44_activated else 0,
                 1 if state.daily_shutdown_status else 0,
                 state.daily_shutdown_reason,
@@ -260,3 +274,14 @@ class CapitalLedger:
                 (limit,)
             ).fetchall()
             return [dict(r) for r in rows]
+
+    def reconcile_with_external(self, external_balance_cents: int) -> Tuple[bool, int]:
+        """
+        Validates internal total equity against an external ledger or exchange balance.
+        Returns: (in_sync: bool, difference_cents: int) where difference = external - internal.
+        """
+        state = self.get_state()
+        if not state:
+            return False, external_balance_cents
+        diff = external_balance_cents - state.total_equity_cents
+        return (diff == 0), diff

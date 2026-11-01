@@ -48,6 +48,17 @@ class DashboardState:
         # Recent events/logs
         self.logs: Deque[Dict[str, Any]] = collections.deque(maxlen=100)
 
+        # Capital State & Compounding
+        self.capital_state: Dict[str, Any] = {
+            "total_equity": 11.0,
+            "active_capital": 11.0,
+            "protected_capital": 0.0,
+            "active_shortfall": 0.0,
+            "milestone_44_activated": False,
+            "daily_shutdown_status": False,
+            "daily_shutdown_reason": "",
+        }
+
         # Control signals requested from UI
         self.requested_action: Optional[str] = None
 
@@ -124,6 +135,9 @@ class DashboardState:
         self.requested_action = None
         return act
 
+    def update_capital(self, cap_dict: Dict[str, Any]) -> None:
+        self.capital_state.update(cap_dict)
+
     def to_dict(self) -> Dict[str, Any]:
         """Snapshot of current system state for API/UI."""
         now = time.time()
@@ -156,6 +170,7 @@ class DashboardState:
             "feed_status": feed_quality,
             "staleness_sec": staleness,
             "latency_ms": round(self.last_latency_ms, 1),
+            "capital": self.capital_state,
             "server_time": time.time(),
             "server_time_str": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
             "logs": list(self.logs)[:30],
