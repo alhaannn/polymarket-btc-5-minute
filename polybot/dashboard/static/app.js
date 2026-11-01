@@ -6,18 +6,45 @@
 let activePerfTab = 'lifetime';
 let performanceData = null;
 let lastLogTimestamp = 0;
+let autoScrollEnabled = true;
+let lastRenderedLogHash = '';
 
 document.addEventListener('DOMContentLoaded', () => {
   initPolling();
-  updateClockLocal();
-  setInterval(updateClockLocal, 1000);
+  updateClockIST();
+  setInterval(updateClockIST, 1000);
 });
 
-function updateClockLocal() {
+function updateClockIST() {
   const now = new Date();
-  const timeStr = now.toTimeString().split(' ')[0];
+  const timeStr = now.toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour12: false });
   const el = document.getElementById('clock-time');
   if (el) el.textContent = timeStr;
+}
+
+function formatISTTime(unixSec) {
+  if (!unixSec) return '--';
+  return new Date(unixSec * 1000).toLocaleTimeString('en-GB', {
+    timeZone: 'Asia/Kolkata',
+    hour12: false,
+  });
+}
+
+function formatISTDateTime(unixSec) {
+  if (!unixSec) return '--';
+  return new Date(unixSec * 1000).toLocaleString('en-GB', {
+    timeZone: 'Asia/Kolkata',
+    hour12: false,
+  });
+}
+
+function toggleAutoScroll() {
+  autoScrollEnabled = !autoScrollEnabled;
+  const btn = document.getElementById('btn-toggle-autoscroll');
+  if (btn) {
+    btn.textContent = autoScrollEnabled ? 'Auto-scroll: ON' : 'Auto-scroll: OFF';
+    btn.classList.toggle('active', autoScrollEnabled);
+  }
 }
 
 function initPolling() {
@@ -275,27 +302,57 @@ function renderState(state) {
   }
 }
 
+function getTagClass(level) {
+  const lvl = (level || '').toUpperCase();
+  if (lvl.includes('REVERSAL')) return 'tag-reversal';
+  if (lvl.includes('SIGNAL')) return 'tag-signal';
+  if (lvl.includes('ORDER')) return 'tag-order';
+  if (lvl.includes('BUY') || lvl.includes('FILL')) return 'tag-buy';
+  if (lvl.includes('SETTLED')) return 'tag-settled';
+  if (lvl.includes('REJECTED')) return 'tag-rejected';
+  if (lvl.includes('SHUTDOWN')) return 'tag-shutdown';
+  if (lvl.includes('RESERVE') || lvl.includes('CAPITAL')) return 'tag-capital';
+  if (lvl.includes('MARKET')) return 'tag-market';
+  if (lvl.includes('RECON')) return 'tag-recon';
+  if (lvl.includes('CONTROL')) return 'tag-control';
+  if (lvl.includes('WARN')) return 'tag-warning';
+  return 'tag-info';
+}
+
 function renderLogs(logs) {
   const container = document.getElementById('log-stream');
   if (!container) return;
 
-  const entriesHtml = logs.map(l => {
-    let tagClass = 'tag-info';
-    if (l.level.includes('SIGNAL') || l.level.includes('BUY')) tagClass = 'tag-signal';
-    if (l.level.includes('REVERSAL')) tagClass = 'tag-reversal';
-    if (l.level.includes('SETTLED')) tagClass = 'tag-settled';
-    if (l.level.includes('CONTROL')) tagClass = 'tag-control';
+  if (!logs || logs.length === 0) {
+    container.innerHTML = '<div class="log-empty">Listening for engine trade events and telemetry...</div>';
+    return;
+  }
 
+  // Display in chronological order (oldest at top, newest at bottom of scroller)
+  const chronological = logs.slice().reverse();
+  const currentHash = chronological.map(l => `${l.timestamp}-${l.level}-${l.message}`).join('|');
+  if (currentHash === lastRenderedLogHash) {
+    return; // Don't disrupt DOM or scroll position if logs unchanged
+  }
+  lastRenderedLogHash = currentHash;
+
+  const entriesHtml = chronological.map(l => {
+    const tagClass = getTagClass(l.level);
+    const timeStr = l.timestamp ? formatISTTime(l.timestamp) : (l.time_str || '--');
     return `
       <div class="log-entry">
-        <span class="log-time">${l.time_str}</span>
-        <span class="log-tag ${tagClass}">${l.level}</span>
+        <span class="log-time">${timeStr}</span>
+        <span class="log-tag ${tagClass}">${escapeHtml(l.level)}</span>
         <span class="log-message">${escapeHtml(l.message)}</span>
       </div>
     `;
   }).join('');
 
   container.innerHTML = entriesHtml;
+
+  if (autoScrollEnabled) {
+    container.scrollTop = container.scrollHeight;
+  }
 }
 
 function renderPerformanceTab() {
@@ -386,7 +443,7 @@ function renderTradesTable(trades) {
       ? `<span class="outcome-pill pill-up">UP</span>`
       : `<span class="outcome-pill pill-down">DOWN</span>`;
 
-    const timeStr = t.exec_ts ? new Date(t.exec_ts * 1000).toTimeString().split(' ')[0] : '--';
+    const timeStr = formatISTTime(t.exec_ts);
     const latStr = t.latency_ms ? `${t.latency_ms.toFixed(1)}ms` : '< 1ms';
 
     return `
@@ -551,7 +608,7 @@ function renderCapital(cap) {
 
   const lastAuditEl = document.getElementById('val-cap-last-audit');
   if (lastAuditEl && cap.last_reconciliation_ts > 0) {
-    lastAuditEl.textContent = new Date(cap.last_reconciliation_ts * 1000).toTimeString().split(' ')[0];
+    lastAuditEl.textContent = formatISTTime(cap.last_reconciliation_ts);
   }
 }
 
@@ -593,7 +650,7 @@ function renderCapitalTransactions(txs) {
     else if (t.event_type.includes('LOSS')) tagClass = 'status-pill status-stopped';
     else if (t.event_type.includes('PROFIT')) tagClass = 'status-pill status-running';
 
-    const timeStr = t.created_at_ts ? new Date(t.created_at_ts * 1000).toTimeString().split(' ')[0] : '--';
+    const timeStr = formatISTTime(t.created_at_ts);
 
     return `
       <tr>

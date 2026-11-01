@@ -61,8 +61,9 @@ async def run_recorder(config: PolybotConfig) -> None:
         await recorder.stop()
         log.info("Recorder shut down complete.")
 
-async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
+async def run_paper(config: PolybotConfig, demo: bool = False, reset: bool = False) -> None:
     import math
+    from polybot.tz import ist_today_str
     from polybot.dashboard.server import DashboardServer
     from polybot.dashboard.state import DashboardState
     from polybot.execution.base import Order
@@ -85,6 +86,18 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
         taker_fee_rate=config.strategy.taker_fee_rate
     )
 
+    ledger = TradeLedger(config.recorder.data_dir / "paper_ledger.db")
+
+    dash_state = DashboardState()
+    dash_state.set_bot_status("RUNNING")
+    dash_state.strategy_name = config.strategy.strategy_name
+
+    if reset:
+        log.info("Reset requested: wiping trade log and reinitializing capital ledger at $11.00 starting equity")
+        ledger.clear_all_trades()
+        capital_mgr.reset(starting_equity_usd=11.0)
+        dash_state.add_log("CONTROL", "Reset complete: cleared historical trade log, starting equity set to $11.00 (PnL $0.00)")
+
     log.info(
         "PAPER MODE ACTIVE | strategy=%s initial_stake=$%.2f reversal_stake=$%.2f latency=%dms demo=%s",
         config.strategy.strategy_name,
@@ -94,7 +107,6 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
         demo,
     )
 
-    ledger = TradeLedger(config.recorder.data_dir / "paper_ledger.db")
     engine = PaperExecutionEngine(config.strategy, ledger=ledger)
     client = PolymarketClient(config.feeds.gamma_rest_url, config.feeds.clob_rest_url)
     health = FeedHealthTracker(config.feeds.max_feed_staleness_sec, max_divergence_pct=config.feeds.max_divergence_pct)
@@ -105,12 +117,8 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
         waiting_period_sec=config.strategy.reversal_window_start_sec
     )
 
-    dash_state = DashboardState()
-    dash_state.set_bot_status("RUNNING")
-    dash_state.strategy_name = config.strategy.strategy_name
-
     # Check for Option B reserve activation upon bot startup/restart (Roadmap Phase 6)
-    today = time.strftime("%Y-%m-%d")
+    today = ist_today_str()
     activated, released_usd, _ = capital_mgr.check_and_activate_next_day_reserve(today)
     if activated:
         dash_state.add_log("RESERVE", f"Option B Reserve Release on startup: +${released_usd:.2f} active funds released for {today}")
@@ -378,7 +386,7 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
                 cur_price = health.chainlink.last_price or 0.0
 
                 # Check Option B Reserve Release for new trading day (Roadmap Phase 6)
-                today = time.strftime("%Y-%m-%d")
+                today = ist_today_str()
                 activated, released_usd, _ = capital_mgr.check_and_activate_next_day_reserve(today)
                 if activated:
                     dash_state.add_log("RESERVE", f"Option B Reserve Release: +${released_usd:.2f} active funds released for {today}")
@@ -394,7 +402,7 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
                     stake_usd = sig.cost_usd
                     risk.sync_open_exposure(engine.get_open_exposure())
 
-                    today = time.strftime("%Y-%m-%d")
+                    today = ist_today_str()
 
                     # Daily shutdown halt (Roadmap Phase 5)
                     if capital_mgr.is_daily_shutdown_active(today):
@@ -422,7 +430,7 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
                         if hasattr(strat, "on_order_rejected"):
                             strat.on_order_rejected(sig.signal_type)
                         log.warning("[ORDER_BUDGET_REJECTED] %s: %s", sig.signal_type, b_val.reason)
-                        dash_state.add_log("WARNING", f"Budget rejected: {b_val.reason}")
+                        dash_state.add_log("REJECTED", f"Order budget blocked ({sig.signal_type}): {b_val.reason}")
                         continue
 
                     allowed, reason = risk.check_trade_allowed(stake_usd, current_window_idx)
@@ -454,14 +462,18 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
                             "last_checked_ts": 0.0,
                         })
                         dash_state.add_log(
-                            "SIGNAL",
+                            "SIGNAL" if sig.signal_type == "INITIAL" else "REVERSAL",
                             f"Signal triggered: {sig.signal_type} {sig.side} (${stake_usd:.2f}) prob={sig.trigger_prob:.3f}"
+                        )
+                        dash_state.add_log(
+                            "ORDER",
+                            f"Order placed: {order.order_id} ({sig.signal_type} {sig.side} ${stake_usd:.2f} limit=${sig.price:.3f})"
                         )
                     else:
                         if hasattr(strat, "on_order_rejected"):
                             strat.on_order_rejected(sig.signal_type)
                         log.warning("Trade rejected by Risk Manager: %s", reason)
-                        dash_state.add_log("WARNING", f"Risk rejected trade: {reason}")
+                        dash_state.add_log("REJECTED", f"Risk check rejected ({sig.signal_type}): {reason}")
 
             # Check settlements for concluded windows
             pending_slugs = {item["slug"] for item in open_trades_to_settle if now >= item.get("window_end", 0)}
@@ -495,7 +507,7 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
                                 settlement_id=settle_id,
                                 net_pnl_usd=settled_pos.realized_pnl_usd,
                                 fee_usd=settled_pos.total_fees_usd,
-                                trading_day=time.strftime("%Y-%m-%d"),
+                                trading_day=ist_today_str(),
                                 signal_type=settled_pos.signal_type,
                             )
                             log.info("[SETTLEMENT_PROCESSED] settle_id=%s net_pnl=$%+.2f fee=$%.2f",
@@ -510,7 +522,7 @@ async def run_paper(config: PolybotConfig, demo: bool = False) -> None:
                                 log.info("Cancelled %d unfilled pending orders due to daily shutdown", cancelled_cnt)
 
                         open_exp = engine.get_open_exposure()
-                        init_b, rev_b = capital_mgr.get_trade_budgets(time.strftime("%Y-%m-%d"))
+                        init_b, rev_b = capital_mgr.get_trade_budgets(ist_today_str())
                         dash_cap = capital_mgr.state.to_dict()
                         dash_cap.update({
                             "current_initial_budget": init_b,
@@ -608,6 +620,7 @@ def main() -> None:
     paper_parser.add_argument("--host", type=str, default=None, help="Dashboard host (e.g. 0.0.0.0 for VPS access)")
     paper_parser.add_argument("--no-dashboard", action="store_true", help="Run headless without dashboard server")
     paper_parser.add_argument("--demo", action="store_true", help="Simulate 5m market price & probability swings to test UI and strategy")
+    paper_parser.add_argument("--reset", action="store_true", help="Reset all trades and capital state to $11.00 starting balance")
 
     # Dashboard standalone command
     dash_parser = subparsers.add_parser("dashboard", help="Run local web dashboard standalone")
@@ -646,7 +659,7 @@ def main() -> None:
         if args.no_dashboard:
             config.dashboard.enabled = False
         try:
-            asyncio.run(run_paper(config, demo=getattr(args, "demo", False)))
+            asyncio.run(run_paper(config, demo=getattr(args, "demo", False), reset=getattr(args, "reset", False)))
         except KeyboardInterrupt:
             log.info("Stopped by user.")
     elif args.command == "dashboard":

@@ -46,10 +46,18 @@ class CapitalManager:
         else:
             self.verify_invariants()
 
+    def reset(self, starting_equity_usd: float = 11.0) -> None:
+        """Resets the ledger and state cleanly to fresh starting equity."""
+        from polybot.tz import ist_today_str
+        self.ledger.reset_ledger(starting_equity_usd=starting_equity_usd, trading_day=ist_today_str())
+        self.state = self.ledger.get_state()
+        log.info("[CAPITAL_RESET] CapitalManager state reset to $%.2f starting equity", starting_equity_usd)
+
     def _initialize_starting_capital(self, starting_equity_usd: float) -> None:
         """Initializes canonical starting capital ($11.00 default = 1100 cents)."""
+        from polybot.tz import ist_today_str
         cents = int(round(starting_equity_usd * 100))
-        today = time.strftime("%Y-%m-%d")
+        today = ist_today_str()
         self.state = CapitalState(
             total_equity_cents=cents,
             active_capital_cents=cents,

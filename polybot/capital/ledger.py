@@ -406,3 +406,59 @@ class CapitalLedger:
             ).fetchone()
             return dict(row) if row else None
 
+    def reset_ledger(
+        self,
+        starting_equity_usd: float = 11.0,
+        trading_day: Optional[str] = None,
+        clear_paper_trades: bool = True,
+    ) -> None:
+        """
+        Completely resets capital state and transactions to fresh starting equity.
+        Wipes historical transactions, settlements, and shutdown events.
+        Re-initializes canonical $11.00 capital state and initial capital transaction.
+        """
+        from polybot.tz import ist_today_str
+        now = time.time()
+        cents = int(round(starting_equity_usd * 100))
+        day = trading_day or ist_today_str()
+
+        with self._get_connection() as conn:
+            if clear_paper_trades:
+                conn.execute("DELETE FROM paper_trades")
+            conn.execute("DELETE FROM capital_transactions")
+            conn.execute("DELETE FROM processed_settlements")
+            conn.execute("DELETE FROM shutdown_events")
+            conn.execute("DELETE FROM capital_reconciliations")
+
+            conn.execute("""
+                INSERT OR REPLACE INTO capital_state (
+                    id, total_equity_cents, active_capital_cents, protected_capital_cents,
+                    realized_profit_cents, realized_loss_cents, active_shortfall_cents,
+                    milestone_44_activated, daily_shutdown_status, daily_shutdown_reason,
+                    daily_shutdown_trading_day, daily_failed_initial_count,
+                    daily_failed_reversal_count, daily_failure_trading_day,
+                    next_day_activation_eligible, last_activated_shutdown_event_id,
+                    last_activation_trading_day, last_processed_settlement_id,
+                    last_reconciliation_ts, last_reconciliation_status,
+                    last_reconciliation_diff_cents, reconciliation_blocked,
+                    capital_ledger_version, updated_at_ts
+                ) VALUES (
+                    1, ?, ?, 0, 0, 0, 0, 0, 0, '', '', 0, 0, ?, 0, NULL, NULL, NULL, 0.0, 'OK', 0, 0, 1, ?
+                )
+            """, (cents, cents, day, now))
+
+            tx_id = f"tx-init-{int(now * 1000)}"
+            conn.execute("""
+                INSERT INTO capital_transactions (
+                    tx_id, event_type, amount_cents, active_before_cents, active_after_cents,
+                    protected_before_cents, protected_after_cents, total_before_cents,
+                    total_after_cents, fee_cents, settlement_id, trading_day, reason,
+                    idempotency_key, created_at_ts
+                ) VALUES (
+                    ?, 'INITIAL_CAPITAL', ?, 0, ?, 0, 0, 0, ?, 0, NULL, ?,
+                    'Fresh start starting capital initialized', ?, ?
+                )
+            """, (tx_id, cents, cents, cents, day, f"init-fresh-{int(now)}", now))
+            conn.commit()
+            log.info("[LEDGER_RESET] Wiped all transactions & trades; initialized starting capital to $%.2f", starting_equity_usd)
+

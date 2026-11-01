@@ -35,7 +35,7 @@
         <span class="latency-label">LATENCY:</span> <span id="val-latency">0.0 ms</span>
       </div>
       <div class="clock-display" id="clock-display">
-        <span id="clock-time">--:--:--</span> <span class="clock-tz" id="clock-tz">LOCAL</span>
+        <span id="clock-time">--:--:--</span> <span class="clock-tz" id="clock-tz">IST</span>
       </div>
     </div>
 
@@ -276,17 +276,20 @@
       </div>
     </section>
 
-    <!-- Row 4: Live Event Stream & Activity Feed -->
+    <!-- Row 5: Live Event Stream & Activity Feed -->
     <section class="card activity-card" id="card-activity">
       <div class="card-header">
         <div class="header-left">
-          <span class="card-tag">AUDIT LOG</span>
-          <h2 class="card-title">Real-time Execution & Telemetry Log</h2>
+          <span class="card-tag">AUDIT LOG (IST)</span>
+          <h2 class="card-title">Real-time Execution & Trade Log</h2>
         </div>
-        <button class="btn btn-sm btn-outline" id="btn-clear-logs" onclick="clearLocalLogs()">Clear Display</button>
+        <div class="header-right" style="display: flex; gap: 8px; align-items: center;">
+          <button class="btn btn-sm btn-outline active" id="btn-toggle-autoscroll" onclick="toggleAutoScroll()">Auto-scroll: ON</button>
+          <button class="btn btn-sm btn-outline" id="btn-clear-logs" onclick="clearLocalLogs()">Clear Display</button>
+        </div>
       </div>
       <div class="log-stream-container" id="log-stream">
-        <div class="log-empty">Listening for engine events...</div>
+        <div class="log-empty">Listening for engine trade events and telemetry...</div>
       </div>
     </section>
 

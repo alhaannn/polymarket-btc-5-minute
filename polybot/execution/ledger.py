@@ -182,17 +182,25 @@ class TradeLedger:
             row = conn.execute("SELECT COUNT(DISTINCT slug) FROM paper_trades").fetchone()
             return row[0] if row else 0
 
-    def get_performance_summary(self, timezone_mode: str = "local") -> Dict[str, Any]:
+    def clear_all_trades(self) -> int:
+        """Deletes all trade records from the paper_trades table. Returns count deleted."""
+        with self._get_connection() as conn:
+            cur = conn.execute("DELETE FROM paper_trades")
+            conn.commit()
+            return cur.rowcount
+
+    def get_performance_summary(self, timezone_mode: str = "IST") -> Dict[str, Any]:
         """
         Computes financial and activity metrics for:
-        - Current Hour
-        - Current Day
+        - Current Hour (IST)
+        - Current Day (IST)
         - Lifetime
         """
-        now = datetime.datetime.now()
-        # Hour start
+        from polybot.tz import now_ist
+        now = now_ist()
+        # Hour start in IST
         hour_start = now.replace(minute=0, second=0, microsecond=0).timestamp()
-        # Day start
+        # Day start in IST
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
 
         with self._get_connection() as conn:

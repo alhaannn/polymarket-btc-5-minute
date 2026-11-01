@@ -9,6 +9,8 @@ import collections
 import time
 from typing import Any, Deque, Dict, List, Optional
 
+from polybot.tz import ist_datetime_str, ist_time_str
+
 
 class DashboardState:
     """Singleton-style or injected state holder for the local web dashboard."""
@@ -46,7 +48,7 @@ class DashboardState:
         self.last_latency_ms: float = 0.0
 
         # Recent events/logs
-        self.logs: Deque[Dict[str, Any]] = collections.deque(maxlen=100)
+        self.logs: Deque[Dict[str, Any]] = collections.deque(maxlen=1000)
 
         # Capital State & Compounding (Roadmap Phase 7 Section B)
         self.capital_state: Dict[str, Any] = {
@@ -86,9 +88,10 @@ class DashboardState:
         self.requested_action: Optional[str] = None
 
     def add_log(self, level: str, message: str) -> None:
+        now_ts = time.time()
         self.logs.appendleft({
-            "timestamp": time.time(),
-            "time_str": time.strftime("%H:%M:%S", time.localtime()),
+            "timestamp": now_ts,
+            "time_str": ist_time_str(now_ts),
             "level": level.upper(),
             "message": message,
         })
@@ -194,7 +197,7 @@ class DashboardState:
             "staleness_sec": staleness,
             "latency_ms": round(self.last_latency_ms, 1),
             "capital": self.capital_state,
-            "server_time": time.time(),
-            "server_time_str": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
-            "logs": list(self.logs)[:30],
+            "server_time": now,
+            "server_time_str": ist_datetime_str(now),
+            "logs": list(self.logs)[:200],
         }

@@ -677,54 +677,92 @@ body {
    Card 4: Activity & Telemetry Log
    -------------------------------------------------------------------------- */
 .log-stream-container {
-  height: 180px;
+  height: 380px;
+  max-height: 480px;
   background: #ffffff;
   border: 1px solid var(--border-light);
   border-radius: var(--radius-sm);
-  padding: 8px 12px;
+  padding: 10px 14px;
   overflow-y: auto;
+  overflow-x: hidden;
   font-family: var(--font-mono);
   font-size: 11px;
   line-height: 1.6;
+  scroll-behavior: smooth;
+}
+
+.log-stream-container::-webkit-scrollbar {
+  width: 6px;
+}
+
+.log-stream-container::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 3px;
+}
+
+.log-stream-container::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+
+.log-stream-container::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
 }
 
 .log-entry {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  padding: 2px 0;
-  border-bottom: 1px solid #f8fafc;
+  padding: 3px 4px;
+  border-bottom: 1px solid #f1f5f9;
+  transition: background 0.1s ease;
+  border-radius: 2px;
+}
+
+.log-entry:hover {
+  background: #f8fafc;
 }
 
 .log-time {
   color: var(--text-faint);
   font-size: 10px;
-  min-width: 65px;
+  min-width: 68px;
+  font-feature-settings: "tnum";
 }
 
 .log-tag {
   font-size: 9px;
   font-weight: 700;
-  padding: 1px 5px;
-  border-radius: 2px;
+  padding: 1px 6px;
+  border-radius: 3px;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
-.tag-info { background: var(--bg-subtle); color: var(--text-secondary); }
+.tag-info { background: var(--bg-subtle); color: var(--text-secondary); border: 1px solid var(--border-light); }
 .tag-signal { background: var(--color-green-bg); color: var(--color-green); border: 1px solid var(--color-green-border); }
 .tag-reversal { background: var(--color-amber-bg); color: var(--color-amber); border: 1px solid var(--color-amber-border); }
-.tag-settled { background: var(--color-blue-bg); color: var(--color-blue); border: 1px solid var(--color-blue-border); }
+.tag-order { background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; font-weight: 700; }
+.tag-buy { background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0; font-weight: 700; }
+.tag-settled { background: var(--color-blue-bg); color: var(--color-blue); border: 1px solid var(--color-blue-border); font-weight: 700; }
+.tag-rejected { background: #fee2e2; color: #b91c1c; border: 1px solid #fecaca; font-weight: 700; }
+.tag-warning { background: #fef3c7; color: #b45309; border: 1px solid #fde68a; }
+.tag-capital { background: #f3e8ff; color: #7e22ce; border: 1px solid #e9d5ff; font-weight: 700; }
+.tag-market { background: #f1f5f9; color: #475569; border: 1px solid #e2e8f0; }
+.tag-shutdown { background: #991b1b; color: #ffffff; font-weight: 700; }
+.tag-recon { background: #ccfbf1; color: #0f766e; border: 1px solid #99f6e4; }
 .tag-control { background: #0f172a; color: #ffffff; }
 
 .log-message {
   color: var(--text-primary);
-  word-break: break-all;
+  word-break: break-word;
+  flex: 1;
 }
 
 .log-empty {
   color: var(--text-muted);
   font-style: italic;
-  padding: 20px;
+  padding: 30px;
   text-align: center;
 }
 
