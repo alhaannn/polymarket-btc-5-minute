@@ -598,16 +598,148 @@ function renderCapital(cap) {
     }
   }
 
+  // --- Dynamic Milestone & Tier Progression Engine ---
+  const totEq = Number(cap.total_equity) || 0;
+  const actCap = Number(cap.active_capital) || 0;
+  const protCap = Number(cap.protected_capital) || 0;
+  const ms44 = Boolean(cap.milestone_44_activated);
+
+  // Determine current tier
+  let currentTierText = 'TIER 1 (BASE: $1/$10)';
+  if (actCap >= 44.0) {
+    currentTierText = 'TIER 4 ($4/$40 STAKES)';
+  } else if (actCap >= 33.0) {
+    currentTierText = 'TIER 3 ($3/$30 STAKES)';
+  } else if (actCap >= 22.0 || ms44) {
+    currentTierText = 'TIER 2 ($2/$20 STAKES)';
+  }
+
+  // Determine milestone progression & targets
+  let targetTotal = 44.0;
+  let targetActive = 22.0;
+  let prevTotal = 11.0;
+  let nextMilestoneTitle = 'Next Milestone: Milestone 1 ($44.00 Total)';
+  let nextRewardText = 'Unlocks: <strong>$2 Initial / $20 Reversal Stakes</strong> (Tier 2)';
+  let activeMarkerId = 'marker-44';
+  let pillText = 'MILESTONE 1: PENDING';
+  let pillClass = 'status-pill mode-paper';
+
+  if (!ms44 && totEq < 44.0) {
+    targetTotal = 44.0;
+    targetActive = 22.0;
+    prevTotal = 11.0;
+    nextMilestoneTitle = 'Next Milestone: Milestone 1 ($44.00 Total)';
+    nextRewardText = 'Unlocks: <strong>$2 Initial / $20 Reversal Stakes</strong> (Tier 2)';
+    activeMarkerId = 'marker-44';
+    pillText = 'MILESTONE 1: PENDING';
+    pillClass = 'status-pill mode-paper';
+  } else if (totEq < 66.0 || actCap < 33.0) {
+    targetTotal = 66.0;
+    targetActive = 33.0;
+    prevTotal = 44.0;
+    nextMilestoneTitle = 'Next Milestone: Milestone 2 ($66.00 Total)';
+    nextRewardText = 'Unlocks: <strong>$3 Initial / $30 Reversal Stakes</strong> (Tier 3, +50% Payout)';
+    activeMarkerId = 'marker-66';
+    pillText = 'MILESTONE 1: $44 REACHED';
+    pillClass = 'status-pill status-running';
+  } else if (totEq < 88.0 || actCap < 44.0) {
+    targetTotal = 88.0;
+    targetActive = 44.0;
+    prevTotal = 66.0;
+    nextMilestoneTitle = 'Next Milestone: Milestone 3 ($88.00 Total)';
+    nextRewardText = 'Unlocks: <strong>$4 Initial / $40 Reversal Stakes</strong> (Tier 4)';
+    activeMarkerId = 'marker-88';
+    pillText = 'MILESTONE 2: $66 REACHED';
+    pillClass = 'status-pill status-running';
+  } else if (totEq < 100.0 || actCap < 50.0) {
+    targetTotal = 100.0;
+    targetActive = 50.0;
+    prevTotal = 88.0;
+    nextMilestoneTitle = 'Next Milestone: Century Club ($100.00 Total)';
+    nextRewardText = 'Unlocks: <strong>10x Capital Return</strong> & Elite Tier';
+    activeMarkerId = 'marker-100';
+    pillText = 'MILESTONE 3: $88 REACHED';
+    pillClass = 'status-pill status-running';
+  } else {
+    targetTotal = Math.ceil(totEq / 50.0) * 50.0;
+    targetActive = targetTotal / 2.0;
+    prevTotal = targetTotal - 50.0;
+    nextMilestoneTitle = `Next Milestone: Elite Tier ($${targetTotal.toFixed(0)} Total)`;
+    nextRewardText = 'Unlocks: Extended Scale & Perpetual Compounding';
+    activeMarkerId = 'marker-100';
+    pillText = 'CENTURY CLUB: $100+ REACHED';
+    pillClass = 'status-pill status-running';
+  }
+
+  // Calculate dynamic progress %
+  const totalRange = Math.max(1, targetTotal - prevTotal);
+  const currentProgress = Math.max(0, totEq - prevTotal);
+  let progressPct = (currentProgress / totalRange) * 100;
+  progressPct = Math.min(100, Math.max(0, progressPct));
+
+  const remainingActive = Math.max(0, targetActive - actCap);
+
+  // Update UI elements
   const msPill = document.getElementById('pill-cap-ms44');
   if (msPill) {
-    if (cap.milestone_44_activated) {
-      msPill.className = 'status-pill status-running';
-      msPill.textContent = 'MILESTONE $44: ACTIVATED';
-    } else {
-      msPill.className = 'status-pill mode-paper';
-      msPill.textContent = 'MILESTONE $44: PENDING';
-    }
+    msPill.className = pillClass;
+    msPill.textContent = pillText;
   }
+
+  const tierBadge = document.getElementById('badge-current-tier');
+  if (tierBadge) tierBadge.textContent = currentTierText;
+
+  const msTitle = document.getElementById('title-next-milestone');
+  if (msTitle) msTitle.textContent = nextMilestoneTitle;
+
+  const pctEl = document.getElementById('val-milestone-pct');
+  if (pctEl) pctEl.textContent = `${progressPct.toFixed(1)}%`;
+
+  const remainingEl = document.getElementById('val-milestone-remaining');
+  if (remainingEl) {
+    remainingEl.textContent = remainingActive > 0
+      ? `($${remainingActive.toFixed(2)} active to unlock)`
+      : `(Active target met: $${actCap.toFixed(2)})`;
+  }
+
+  const fillEl = document.getElementById('fill-milestone-progression');
+  if (fillEl) fillEl.style.width = `${progressPct.toFixed(1)}%`;
+
+  const statActive = document.getElementById('stat-active-target');
+  if (statActive) {
+    statActive.innerHTML = `Active Capital: <strong>$${actCap.toFixed(2)}</strong> / $${targetActive.toFixed(2)} Target`;
+  }
+
+  const statProtected = document.getElementById('stat-protected-harvest');
+  if (statProtected) {
+    statProtected.innerHTML = `Protected Vault: <strong>$${protCap.toFixed(2)}</strong> / $50.00 Weekly Cash Target`;
+  }
+
+  const statReward = document.getElementById('stat-next-reward');
+  if (statReward) {
+    statReward.innerHTML = `${nextRewardText}`;
+  }
+
+  // Update checkpoint markers on track
+  const markers = [
+    { id: 'marker-11', threshold: 11.0 },
+    { id: 'marker-44', threshold: 44.0 },
+    { id: 'marker-66', threshold: 66.0 },
+    { id: 'marker-88', threshold: 88.0 },
+    { id: 'marker-100', threshold: 100.0 }
+  ];
+  markers.forEach(m => {
+    const el = document.getElementById(m.id);
+    if (!el) return;
+    if (totEq >= m.threshold || (m.threshold === 44.0 && ms44)) {
+      el.className = 'marker marker-passed';
+    } else if (m.id === activeMarkerId) {
+      el.className = 'marker marker-active';
+    } else {
+      el.className = 'marker';
+    }
+  });
+
 
   const reconPill = document.getElementById('pill-cap-recon');
   if (reconPill) {

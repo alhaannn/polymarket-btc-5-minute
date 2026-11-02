@@ -208,6 +208,48 @@
         </div>
       </div>
 
+      <!-- Dynamic Milestone & Tier Progression Gauge -->
+      <div class="milestone-progression-panel" id="panel-milestone-progression">
+        <div class="progression-header">
+          <div class="progression-left">
+            <span class="progression-badge" id="badge-current-tier">TIER 1 (BASE)</span>
+            <span class="progression-title" id="title-next-milestone">Next Milestone: Milestone 1 ($44.00 Total)</span>
+          </div>
+          <div class="progression-right">
+            <span class="progression-pct" id="val-milestone-pct">0.0%</span>
+            <span class="progression-remaining" id="val-milestone-remaining">--</span>
+          </div>
+        </div>
+        
+        <div class="progression-track">
+          <div class="progression-fill" id="fill-milestone-progression" style="width: 0%;">
+            <div class="progression-glow"></div>
+          </div>
+          <div class="progression-markers" id="container-milestone-markers">
+            <div class="marker marker-passed" id="marker-11" title="$11.00 Starting Seed"><span class="marker-dot"></span><span class="marker-label">$11</span></div>
+            <div class="marker" id="marker-44" title="Milestone 1 ($44.00 Total)"><span class="marker-dot"></span><span class="marker-label">$44</span></div>
+            <div class="marker" id="marker-66" title="Milestone 2 ($66.00 Total)"><span class="marker-dot"></span><span class="marker-label">$66</span></div>
+            <div class="marker" id="marker-88" title="Milestone 3 ($88.00 Total)"><span class="marker-dot"></span><span class="marker-label">$88</span></div>
+            <div class="marker" id="marker-100" title="Milestone 4 ($100.00 Century)"><span class="marker-dot"></span><span class="marker-label">$100</span></div>
+          </div>
+        </div>
+
+        <div class="progression-footer">
+          <div class="progression-stat">
+            <span class="stat-bullet">🎯</span>
+            <span class="stat-text" id="stat-active-target">Active Capital: <strong>$11.00</strong> / $22.00 Target</span>
+          </div>
+          <div class="progression-stat">
+            <span class="stat-bullet">🛡️</span>
+            <span class="stat-text" id="stat-protected-harvest">Protected Vault: <strong>$0.00</strong> / $50.00 Target</span>
+          </div>
+          <div class="progression-stat">
+            <span class="stat-bullet">⚡</span>
+            <span class="stat-text" id="stat-next-reward">Unlocks: <strong>$2 Initial / $20 Reversal Stakes</strong></span>
+          </div>
+        </div>
+      </div>
+
       <div class="capital-details-bar" style="display: flex; gap: 16px; background: var(--bg-subtle); padding: 10px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border-light); font-size: 11px;">
         <div style="flex: 1;">
           <span style="color: var(--text-muted); font-weight: 600;">DERIVED BUDGETS:</span>
