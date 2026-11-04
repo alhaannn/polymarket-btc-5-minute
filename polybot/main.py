@@ -80,7 +80,11 @@ async def run_paper(config: PolybotConfig, demo: bool = False, reset: bool = Fal
     from polybot.sizing import PositionSizer
     from polybot.strategy import EdgeStrategy, LegacyStrategy, ReversalStrategy
 
-    capital_mgr = CapitalManager(db_path=config.recorder.data_dir / "paper_ledger.db", starting_equity_usd=11.0)
+    capital_mgr = CapitalManager(
+        db_path=config.recorder.data_dir / "paper_ledger.db",
+        starting_equity_usd=11.0,
+        sizing_mode=os.getenv("SIZING_MODE", "tiered"),
+    )
     budget_calc = DynamicTradeBudgetCalculator(
         min_order_usd=1.0,
         taker_fee_rate=config.strategy.taker_fee_rate,
@@ -601,7 +605,11 @@ async def run_dashboard(config: PolybotConfig) -> None:
     from polybot.capital import CapitalManager, CapitalReconciler
 
     ledger = TradeLedger(config.recorder.data_dir / "paper_ledger.db")
-    capital_mgr = CapitalManager(db_path=config.recorder.data_dir / "paper_ledger.db", starting_equity_usd=11.0)
+    capital_mgr = CapitalManager(
+        db_path=config.recorder.data_dir / "paper_ledger.db",
+        starting_equity_usd=11.0,
+        sizing_mode=os.getenv("SIZING_MODE", "tiered"),
+    )
     reconciler = CapitalReconciler(capital_manager=capital_mgr)
     state = DashboardState()
     state.set_bot_status("STANDALONE_VIEW")

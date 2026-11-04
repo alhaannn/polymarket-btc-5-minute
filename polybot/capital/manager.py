@@ -13,6 +13,7 @@ from __future__ import annotations
 import decimal
 import logging
 import math
+import os
 import time
 import uuid
 from pathlib import Path
@@ -39,7 +40,9 @@ class CapitalManager:
         ledger: Optional[CapitalLedger] = None,
         db_path: Path | str = Path("data/paper_ledger.db"),
         starting_equity_usd: float = 11.0,
+        sizing_mode: Optional[str] = None,
     ):
+        self.sizing_mode = sizing_mode or os.getenv("SIZING_MODE", "canonical")
         self.ledger = ledger or CapitalLedger(db_path)
         self.state = self.ledger.get_state()
         if self.state is None:
@@ -212,11 +215,10 @@ class CapitalManager:
             return 0, 0
 
         active_usd = self.state.active_capital
-        initial_raw = active_usd / 11.0
-        reversal_raw = (active_usd * 10.0) / 11.0
-
-        initial_budget = round_half_up_to_whole_dollar(initial_raw)
-        reversal_budget = round_half_up_to_whole_dollar(reversal_raw)
+        from polybot.capital.sizing import DynamicTradeBudgetCalculator
+        calc = DynamicTradeBudgetCalculator(sizing_mode=self.sizing_mode)
+        initial_budget = calc.calculate_initial_budget(active_usd)
+        reversal_budget = calc.calculate_reversal_budget(active_usd)
 
         log.debug("[TRADE_BUDGET_CALCULATED] Initial=$%d, Reversal=$%d (Active=$%.2f)",
                   initial_budget, reversal_budget, active_usd)
