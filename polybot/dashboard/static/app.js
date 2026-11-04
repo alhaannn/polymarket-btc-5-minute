@@ -368,9 +368,9 @@ function renderState(state) {
 
     // Up badge
     if (badgeUp) {
-      if (state.is_trading_allowed && state.up_prob >= 0.89 && state.up_prob <= 0.91) {
+      if (state.is_trading_allowed && state.up_prob >= 0.85 && state.up_prob <= 0.90) {
         badgeUp.className = 'outcome-state-badge badge-qualified-initial';
-        badgeUp.textContent = 'INITIAL RANGE QUALIFIED [89% - 91%]';
+        badgeUp.textContent = 'INITIAL RANGE QUALIFIED [85% - 90%]';
       } else if (state.initial_side === 'Up' && state.up_bid !== null && state.up_bid !== undefined && state.up_bid <= 0.30) {
         badgeUp.className = 'outcome-state-badge badge-qualified-reversal';
         badgeUp.textContent = 'STOP-LOSS TRIGGER ZONE [≤ 30%]';
@@ -402,9 +402,9 @@ function renderState(state) {
 
     // Down badge
     if (badgeDown) {
-      if (state.is_trading_allowed && state.down_prob >= 0.89 && state.down_prob <= 0.91) {
+      if (state.is_trading_allowed && state.down_prob >= 0.85 && state.down_prob <= 0.90) {
         badgeDown.className = 'outcome-state-badge badge-qualified-initial';
-        badgeDown.textContent = 'INITIAL RANGE QUALIFIED [89% - 91%]';
+        badgeDown.textContent = 'INITIAL RANGE QUALIFIED [85% - 90%]';
       } else if (state.initial_side === 'Down' && state.down_bid !== null && state.down_bid !== undefined && state.down_bid <= 0.30) {
         badgeDown.className = 'outcome-state-badge badge-qualified-reversal';
         badgeDown.textContent = 'STOP-LOSS TRIGGER ZONE [≤ 30%]';
@@ -450,7 +450,7 @@ function renderState(state) {
       stepInit.className = state.is_trading_allowed ? 'exec-step-item step-active' : 'exec-step-item';
     }
     if (descInit) {
-      descInit.textContent = state.is_trading_allowed ? 'Active: scanning 89%–91%' : 'Waiting: gate opens at 180s';
+      descInit.textContent = state.is_trading_allowed ? 'Active: scanning 85%–90% (Price ≤ 0.900)' : 'Waiting: gate opens at 180s';
     }
     if (stepRev) stepRev.className = 'exec-step-item';
     if (descRev) descRev.textContent = 'Awaiting initial trade';
@@ -927,7 +927,7 @@ function renderCapital(cap) {
       }
       shutdownEl.style.color = 'var(--color-red)';
     } else {
-      shutdownEl.textContent = `CLEAR (Daily Fails: ${cap.daily_failed_initial_count || 0}/3)`;
+      shutdownEl.textContent = `CLEAR (Dynamic Stop: 30% / min $6 • 3-Loss Pause)`;
       shutdownEl.style.color = 'var(--text-primary)';
     }
   }

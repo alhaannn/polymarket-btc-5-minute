@@ -149,8 +149,8 @@ class StrategyConfig:
             maker_fee_rate=_get_env_val("MAKER_FEE_RATE", 0.000, float),
             initial_stake_usd=_get_env_val("INITIAL_STAKE_USD", 1.0, float),
             reversal_stake_usd=_get_env_val("REVERSAL_STAKE_USD", 10.0, float),
-            initial_prob_min=_get_env_val("INITIAL_PROB_MIN", 0.89, float),
-            initial_prob_max=_get_env_val("INITIAL_PROB_MAX", 0.92, float),
+            initial_prob_min=_get_env_val("INITIAL_PROB_MIN", 0.85, float),
+            initial_prob_max=_get_env_val("INITIAL_PROB_MAX", 0.90, float),
             reversal_prob_min=_get_env_val("REVERSAL_PROB_MIN", 0.85, float),
             reversal_prob_max=_get_env_val("REVERSAL_PROB_MAX", 0.90, float),
             reversal_window_start_sec=_get_env_val("REVERSAL_WINDOW_START_SEC", 180.0, float),
@@ -160,7 +160,7 @@ class StrategyConfig:
             reporting_timezone=os.getenv("REPORTING_TIMEZONE", "local"),
             prime_hours_only=_get_env_val("PRIME_HOURS_ONLY", True, bool),
             enable_reversals=_get_env_val("ENABLE_REVERSALS", False, bool),
-            price_ceiling=_get_env_val("PRICE_CEILING", 0.910, float),
+            price_ceiling=_get_env_val("PRICE_CEILING", 0.900, float),
             reversal_debounce_sec=_get_env_val("REVERSAL_DEBOUNCE_SEC", 0.0, float),
         )
 
@@ -168,6 +168,8 @@ class StrategyConfig:
 @dataclass
 class RiskConfig:
     daily_loss_limit_usd: float = 25.0
+    daily_loss_limit_pct: float = 0.30
+    daily_loss_min_usd: float = 6.0
     max_trades_per_day: int = 300
     pause_consecutive_losses: int = 3
     pause_duration_windows: int = 3
@@ -181,6 +183,8 @@ class RiskConfig:
     def from_env(cls) -> RiskConfig:
         return cls(
             daily_loss_limit_usd=_get_env_val("DAILY_LOSS_LIMIT_USD", 25.0, float),
+            daily_loss_limit_pct=_get_env_val("DAILY_LOSS_LIMIT_PCT", 0.30, float),
+            daily_loss_min_usd=_get_env_val("DAILY_LOSS_MIN_USD", 6.0, float),
             max_trades_per_day=_get_env_val("MAX_TRADES_PER_DAY", 300, int),
             pause_consecutive_losses=_get_env_val("PAUSE_CONSECUTIVE_LOSSES", 3, int),
             pause_duration_windows=_get_env_val("PAUSE_DURATION_WINDOWS", 3, int),

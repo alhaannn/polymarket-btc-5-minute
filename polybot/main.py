@@ -517,7 +517,9 @@ async def run_paper(config: PolybotConfig, demo: bool = False, reset: bool = Fal
                             sig.signal_type, stake_usd, sig.shares,
                         )
 
-                    allowed, reason = risk.check_trade_allowed(stake_usd, current_window_idx)
+                    allowed, reason = risk.check_trade_allowed(
+                        stake_usd, current_window_idx, active_capital_usd=capital_mgr.state.active_capital
+                    )
                     if allowed:
                         order = Order(
                             order_id=f"paper-{int(now * 1000)}",

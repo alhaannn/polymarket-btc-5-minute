@@ -211,3 +211,98 @@ def test_early_exit_paper_execution_and_settlement(tmp_path):
     assert trades[0]["winner"] == "EXIT_EARLY"
     assert pytest.approx(trades[0]["pnl_usd"], 0.01) == -1.20
 
+
+def test_dynamic_daily_loss_limit_and_consecutive_halt():
+    """Verify dynamic 30% daily loss limit (min $6.00) and 3-consecutive-loss 15m halt."""
+    from polybot.config import RiskConfig
+    from polybot.risk import RiskManager
+
+    risk_cfg = RiskConfig(
+        daily_loss_limit_usd=6.0,
+        daily_loss_limit_pct=0.30,
+        daily_loss_min_usd=6.0,
+        pause_consecutive_losses=3,
+        pause_duration_windows=3,
+    )
+    rm = RiskManager(risk_cfg)
+
+    # 1. Dynamic limit calculation scaling with capital
+    assert rm.get_effective_daily_loss_limit(11.0) == 6.0   # $11 * 30% = $3.30 -> clamped to min $6.00
+    assert rm.get_effective_daily_loss_limit(15.0) == 6.0   # $15 * 30% = $4.50 -> clamped to min $6.00
+    assert rm.get_effective_daily_loss_limit(25.0) == 7.50  # $25 * 30% = $7.50
+    assert rm.get_effective_daily_loss_limit(50.0) == 15.0  # $50 * 30% = $15.00
+    assert rm.get_effective_daily_loss_limit(100.0) == 30.0 # $100 * 30% = $30.00
+
+    # 2. Daily loss limit trigger
+    rm.daily_pnl = -5.50
+    allowed, _ = rm.check_trade_allowed(2.0, current_window_idx=10, active_capital_usd=12.0)
+    assert allowed, "Should allow trade when daily loss is within limit ($5.50 < $6.00)"
+
+    rm.daily_pnl = -6.10
+    allowed, reason = rm.check_trade_allowed(2.0, current_window_idx=10, active_capital_usd=12.0)
+    assert not allowed, "Should block trade when daily loss exceeds $6.00"
+    assert "Daily loss limit reached" in reason
+
+    # 3. Consecutive loss halt (3 in a row -> 3 windows = 15 mins)
+    rm_halt = RiskManager(risk_cfg)
+    rm_halt.record_trade_settled(pnl_usd=-1.30, cost_usd=2.0, current_window_idx=10) # Loss 1
+    allowed, _ = rm_halt.check_trade_allowed(2.0, current_window_idx=11, active_capital_usd=12.0)
+    assert allowed
+
+    rm_halt.record_trade_settled(pnl_usd=-1.30, cost_usd=2.0, current_window_idx=11) # Loss 2
+    allowed, _ = rm_halt.check_trade_allowed(2.0, current_window_idx=12, active_capital_usd=12.0)
+    assert allowed
+
+    rm_halt.record_trade_settled(pnl_usd=-1.30, cost_usd=2.0, current_window_idx=12) # Loss 3!
+    assert rm_halt.consecutive_losses == 3
+    assert rm_halt.pause_until_window_idx == 15 # 12 + 3 windows = 15
+
+    # During cooldown (windows 13, 14) -> BLOCKED
+    allowed_w13, reason = rm_halt.check_trade_allowed(2.0, current_window_idx=13, active_capital_usd=12.0)
+    assert not allowed_w13
+    assert "Consecutive loss cooldown active" in reason
+
+    allowed_w14, _ = rm_halt.check_trade_allowed(2.0, current_window_idx=14, active_capital_usd=12.0)
+    assert not allowed_w14
+
+    # After 15 minutes (window 15) -> RESUMED!
+    allowed_w15, _ = rm_halt.check_trade_allowed(2.0, current_window_idx=15, active_capital_usd=12.0)
+    assert allowed_w15
+
+
+def test_85_to_90_entry_range():
+    """Verify that initial entry range [85% - 90%] triggers correctly with price ceiling 0.900."""
+    cfg = StrategyConfig(
+        prime_hours_only=False,
+        enable_reversals=False,
+        initial_prob_min=0.85,
+        initial_prob_max=0.90,
+        price_ceiling=0.900,
+    )
+    strat = ReversalStrategy(config=cfg)
+    strat.reset_window(window_start=1000)
+
+    # 1. 0.86 (within 0.85 - 0.90) -> Allowed!
+    books_86 = create_mock_books(up_ask=0.86, down_ask=0.14)
+    sig_86 = strat.on_tick(current_price=80000.0, timestamp_sec=1190.0, books=books_86)
+    assert sig_86 is not None
+    assert sig_86.side == "Up"
+    assert sig_86.price <= 0.900
+
+    # Reset
+    strat.reset_window(window_start=2000)
+
+    # 2. 0.84 (< 0.85) -> Rejected!
+    books_84 = create_mock_books(up_ask=0.84, down_ask=0.16)
+    sig_84 = strat.on_tick(current_price=80000.0, timestamp_sec=2190.0, books=books_84)
+    assert sig_84 is None, "Should reject below 0.85 min probability"
+
+    # Reset
+    strat.reset_window(window_start=3000)
+
+    # 3. 0.905 (> 0.900 ceiling) -> Rejected!
+    books_905 = create_mock_books(up_ask=0.905, down_ask=0.095)
+    sig_905 = strat.on_tick(current_price=80000.0, timestamp_sec=3190.0, books=books_905)
+    assert sig_905 is None, "Should reject above 0.900 price ceiling"
+
+

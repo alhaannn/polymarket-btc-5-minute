@@ -81,7 +81,24 @@ class RiskManager:
         """Rule 3.8: Returns True if file named 'STOP' exists in the working directory."""
         return Path(self.config.kill_switch_file).exists()
 
-    def check_trade_allowed(self, proposed_stake_usd: float, current_window_idx: int) -> Tuple[bool, str]:
+    def get_effective_daily_loss_limit(self, active_capital_usd: Optional[float] = None) -> float:
+        """
+        Computes dynamic daily loss limit:
+        max(daily_loss_min_usd, active_capital_usd * daily_loss_limit_pct)
+        """
+        base_limit = abs(self.config.daily_loss_limit_usd)
+        if active_capital_usd is not None and active_capital_usd > 0:
+            pct = getattr(self.config, "daily_loss_limit_pct", 0.30)
+            min_usd = getattr(self.config, "daily_loss_min_usd", 6.0)
+            return max(min_usd, round(active_capital_usd * pct, 2))
+        return base_limit
+
+    def check_trade_allowed(
+        self,
+        proposed_stake_usd: float,
+        current_window_idx: int,
+        active_capital_usd: Optional[float] = None,
+    ) -> Tuple[bool, str]:
         """
         Evaluates whether a new trade is permitted under current risk parameters.
         Returns (allowed: bool, reason: str).
@@ -92,18 +109,19 @@ class RiskManager:
         if self.is_kill_switch_active():
             return False, f"Kill switch active: '{self.config.kill_switch_file}' file exists"
 
-        # 2. Daily loss limit check
-        if self.daily_pnl <= -abs(self.config.daily_loss_limit_usd):
-            return False, f"Daily loss limit reached: PnL ${self.daily_pnl:.2f} <= -${self.config.daily_loss_limit_usd:.2f}"
-
-        # 3. Max trades per day check
-        if self.daily_trades >= self.config.max_trades_per_day:
-            return False, f"Max daily trades reached: {self.daily_trades} >= {self.config.max_trades_per_day}"
-
-        # 4. Consecutive loss pause breaker
+        # 2. Consecutive loss pause breaker (e.g. 3 losses in a row -> 15 min cool-down)
         if current_window_idx < self.pause_until_window_idx:
             windows_remaining = self.pause_until_window_idx - current_window_idx
-            return False, f"Consecutive loss cooldown active: {windows_remaining} windows remaining"
+            return False, f"Consecutive loss cooldown active: {windows_remaining} windows remaining (~{windows_remaining * 5}m)"
+
+        # 3. Dynamic Daily loss limit check
+        effective_limit = self.get_effective_daily_loss_limit(active_capital_usd)
+        if self.daily_pnl <= -abs(effective_limit):
+            return False, f"Daily loss limit reached: PnL ${self.daily_pnl:.2f} <= -${effective_limit:.2f}"
+
+        # 4. Max trades per day check
+        if self.daily_trades >= self.config.max_trades_per_day:
+            return False, f"Max daily trades reached: {self.daily_trades} >= {self.config.max_trades_per_day}"
 
         # 5. Open exposure cap
         if self.current_open_exposure + proposed_stake_usd > self.config.max_open_exposure_usd:
