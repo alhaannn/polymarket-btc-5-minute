@@ -148,6 +148,17 @@ class PaperExecutionEngine(ExecutionEngine):
                 )
                 return None
 
+            # Hard Price Ceiling enforcement at fill time (Option B safeguard for reversal strategy)
+            if getattr(self.config, "strategy_name", "") == "reversal":
+                price_ceil = getattr(self.config, "price_ceiling", 0.985)
+                if avg_price > price_ceil:
+                    order.status = "REJECTED"
+                    log.warning(
+                        "Taker BUY rejected: fill price %.3f exceeds price ceiling %.3f (post-latency slip)",
+                        avg_price, price_ceil
+                    )
+                    return None
+
             fee = calculate_fee(avg_price, shares, "taker", self.fee_schedule)
             fill = Fill(
                 fill_id=str(uuid.uuid4())[:8],

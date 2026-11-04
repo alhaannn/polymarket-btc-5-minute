@@ -157,3 +157,36 @@ def test_settle_multiple_positions_reversal():
     assert down_pos.realized_pnl_usd < 0.0
     assert up_pos.payout_usd > up_pos.total_cost_usd
     assert up_pos.realized_pnl_usd > 0.0
+
+
+def test_paper_execution_price_ceiling_enforcement():
+    """Verify that paper taker orders are rejected if latency slippage pushes fill price above price_ceiling."""
+    cfg = StrategyConfig(strategy_name="reversal", latency_ms=100, price_ceiling=0.910)
+    engine = PaperExecutionEngine(cfg)
+
+    # Place taker order expected at 0.90
+    order = Order(
+        order_id="ord-ceil",
+        slug="btc-test-1",
+        side="Up",
+        action="BUY",
+        order_type="taker",
+        price=0.90,
+        usd_amount=2.0,
+        shares=0.0,
+        created_at_ts=1000.0,
+        latency_ms=100,
+        signal_type="INITIAL",
+    )
+    engine.submit_order(order)
+    assert order.status == "PENDING"
+
+    # Orderbook slips to 0.920 > 0.910
+    book_up = TokenOrderBook("tok-up")
+    book_up.apply_snapshot([], [{"price": "0.920", "size": "100"}])
+    books = {"Up": book_up, "Down": TokenOrderBook("tok-down")}
+
+    # Process pending fills at t=1000.2 (>100ms)
+    fills = engine.process_pending_orders(current_ts=1000.2, books=books)
+    assert len(fills) == 0
+    assert order.status == "REJECTED"
