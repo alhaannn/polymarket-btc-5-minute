@@ -17,7 +17,7 @@
       <div class="brand-icon">PM</div>
       <div class="brand-text">
         <h1 class="brand-title">Polymarket 5-Minute Trading Workstation</h1>
-        <div class="brand-subtitle">Systematic Probability Reversal Simulation &bull; Paper Trading Only</div>
+        <div class="brand-subtitle">Prime-Hours Fortress &bull; Pure Early Exit (30% Stop-Loss) &bull; Paper Trading Only</div>
       </div>
     </div>
 
@@ -135,8 +135,8 @@
           <span class="card-tag">DECISION ENGINE</span>
           <h2 class="card-title">Live Outcome Probabilities & Strategy Triggers</h2>
         </div>
-        <div class="strategy-rule-info">
-          Initial: <span class="rule-highlight">89%–92% ($1)</span> | Reversal: <span class="rule-highlight">85%–90% ($10)</span>
+        <div class="strategy-rule-info" id="strategy-rule-info">
+          Initial: <span class="rule-highlight">89%–91% (Dynamic Stake)</span> | Early Exit: <span class="rule-highlight">≤30% Stop-Loss</span>
         </div>
       </div>
 
@@ -153,8 +153,8 @@
           </div>
           <div class="prob-gauge-track">
             <div class="prob-gauge-fill gauge-up" id="gauge-up" style="width: 0%;"></div>
-            <div class="target-band target-initial" title="Initial Trigger Band: 89% - 92%"></div>
-            <div class="target-band target-reversal" title="Reversal Trigger Band: 85% - 90%"></div>
+            <div class="target-band target-initial" title="Initial Trigger Band: 89% - 91%"></div>
+            <div class="target-band target-reversal" title="Early Exit Stop-Loss Zone: ≤ 30%"></div>
           </div>
           <div class="outcome-state-badge badge-neutral" id="badge-up-status">Awaiting Trading Window</div>
         </div>
@@ -171,8 +171,8 @@
           </div>
           <div class="prob-gauge-track">
             <div class="prob-gauge-fill gauge-down" id="gauge-down" style="width: 0%;"></div>
-            <div class="target-band target-initial" title="Initial Trigger Band: 89% - 92%"></div>
-            <div class="target-band target-reversal" title="Reversal Trigger Band: 85% - 90%"></div>
+            <div class="target-band target-initial" title="Initial Trigger Band: 89% - 91%"></div>
+            <div class="target-band target-reversal" title="Early Exit Stop-Loss Zone: ≤ 30%"></div>
           </div>
           <div class="outcome-state-badge badge-neutral" id="badge-down-status">Awaiting Trading Window</div>
         </div>
@@ -183,24 +183,24 @@
         <div class="exec-step-item" id="step-initial">
           <div class="step-icon" id="icon-step-initial">1</div>
           <div class="step-content">
-            <div class="step-title">Initial Entry ($1.00)</div>
-            <div class="step-desc" id="desc-step-initial">Monitoring for 89%–92% in trading window</div>
+            <div class="step-title" id="title-step-initial">Initial Entry</div>
+            <div class="step-desc" id="desc-step-initial">Monitoring for 89%–91% (Price ≤ 0.910)</div>
           </div>
         </div>
         <div class="step-arrow">&rarr;</div>
         <div class="exec-step-item" id="step-reversal">
           <div class="step-icon" id="icon-step-reversal">2</div>
           <div class="step-content">
-            <div class="step-title">Reversal Entry ($10.00)</div>
-            <div class="step-desc" id="desc-step-reversal">Awaiting initial trade</div>
+            <div class="step-title" id="title-step-reversal">Early Exit Stop-Loss (30%)</div>
+            <div class="step-desc" id="desc-step-reversal">Auto-liquidates at ≤ 0.30 to salvage stake</div>
           </div>
         </div>
         <div class="step-arrow">&rarr;</div>
         <div class="exec-step-item" id="step-settlement">
           <div class="step-icon" id="icon-step-settlement">3</div>
           <div class="step-content">
-            <div class="step-title">Binary Resolution</div>
-            <div class="step-desc" id="desc-step-settlement">Hold to market expiry (300s)</div>
+            <div class="step-title" id="title-step-settlement">Resolution / Settlement</div>
+            <div class="step-desc" id="desc-step-settlement">Binary win ($1.00) or early salvage</div>
           </div>
         </div>
       </div>
@@ -280,19 +280,19 @@
           </div>
           <div class="progression-stat">
             <span class="stat-bullet">⚡</span>
-            <span class="stat-text" id="stat-next-reward">Unlocks: <strong>$2 Initial / $20 Reversal Stakes</strong></span>
+            <span class="stat-text" id="stat-next-reward">Unlocks: <strong>$3 Initial Stakes ($15 Milestone 1)</strong></span>
           </div>
         </div>
       </div>
 
       <div class="capital-details-bar" style="display: flex; gap: 16px; background: var(--bg-subtle); padding: 10px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border-light); font-size: 11px;">
         <div style="flex: 1;">
-          <span style="color: var(--text-muted); font-weight: 600;">DERIVED BUDGETS:</span>
-          <span id="val-cap-budgets" style="font-family: var(--font-mono); font-weight: 600; color: var(--text-primary); margin-left: 6px;">$1 Initial / $10 Reversal</span>
+          <span style="color: var(--text-muted); font-weight: 600;">DERIVED BUDGET:</span>
+          <span id="val-cap-budgets" style="font-family: var(--font-mono); font-weight: 600; color: var(--text-primary); margin-left: 6px;">$2 Initial (Pure Early Exit)</span>
         </div>
         <div style="flex: 1;">
-          <span style="color: var(--text-muted); font-weight: 600;">REVERSAL SHUTDOWN:</span>
-          <span id="val-cap-shutdown-status" style="font-family: var(--font-mono); font-weight: 600; color: var(--text-primary); margin-left: 6px;">CLEAR (Rev: 0/1)</span>
+          <span style="color: var(--text-muted); font-weight: 600;">DAILY SHUTDOWN:</span>
+          <span id="val-cap-shutdown-status" style="font-family: var(--font-mono); font-weight: 600; color: var(--text-primary); margin-left: 6px;">CLEAR (Fails: 0/3)</span>
         </div>
         <div style="flex: 1;">
           <span style="color: var(--text-muted); font-weight: 600;">ACTIVE SHORTFALL:</span>
@@ -343,12 +343,12 @@
         <div class="metric-card">
           <div class="metric-label">Orders Placed</div>
           <div class="metric-large" id="val-total-orders">0</div>
-          <div class="metric-sublabel" id="val-order-split">0 Init ($1) &bull; 0 Rev ($10)</div>
+          <div class="metric-sublabel" id="val-order-split">0 Initial &bull; Pure Early Exit</div>
         </div>
         <div class="metric-card">
-          <div class="metric-label">Reversals Detected</div>
-          <div class="metric-large" id="val-reversals-count">0</div>
-          <div class="metric-sublabel" id="val-markets-count">0 Markets Observed</div>
+          <div class="metric-label" id="label-reversals-count">Protected Trade Model</div>
+          <div class="metric-large" id="val-reversals-count">Pure Early Exit</div>
+          <div class="metric-sublabel" id="val-markets-count">Stop-Loss at ≤ 30%</div>
         </div>
       </div>
     </section>

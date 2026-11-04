@@ -368,12 +368,15 @@ function renderState(state) {
 
     // Up badge
     if (badgeUp) {
-      if (state.is_trading_allowed && state.up_prob >= 0.89 && state.up_prob <= 0.92) {
+      if (state.is_trading_allowed && state.up_prob >= 0.89 && state.up_prob <= 0.91) {
         badgeUp.className = 'outcome-state-badge badge-qualified-initial';
-        badgeUp.textContent = 'INITIAL RANGE QUALIFIED [89% - 92%]';
-      } else if (state.is_trading_allowed && state.up_prob >= 0.85 && state.up_prob <= 0.90 && state.initial_side === 'Down') {
+        badgeUp.textContent = 'INITIAL RANGE QUALIFIED [89% - 91%]';
+      } else if (state.initial_side === 'Up' && state.up_bid !== null && state.up_bid !== undefined && state.up_bid <= 0.30) {
         badgeUp.className = 'outcome-state-badge badge-qualified-reversal';
-        badgeUp.textContent = 'REVERSAL RANGE QUALIFIED [85% - 90%]';
+        badgeUp.textContent = 'STOP-LOSS TRIGGER ZONE [≤ 30%]';
+      } else if (state.initial_side === 'Down' && state.up_prob >= 0.85) {
+        badgeUp.className = 'outcome-state-badge badge-qualified-reversal';
+        badgeUp.textContent = 'OPPOSING SURGE [EARLY EXIT ZONE]';
       } else {
         badgeUp.className = 'outcome-state-badge badge-neutral';
         badgeUp.textContent = state.is_trading_allowed ? 'In Trading Window' : 'Waiting Phase';
@@ -399,12 +402,15 @@ function renderState(state) {
 
     // Down badge
     if (badgeDown) {
-      if (state.is_trading_allowed && state.down_prob >= 0.89 && state.down_prob <= 0.92) {
+      if (state.is_trading_allowed && state.down_prob >= 0.89 && state.down_prob <= 0.91) {
         badgeDown.className = 'outcome-state-badge badge-qualified-initial';
-        badgeDown.textContent = 'INITIAL RANGE QUALIFIED [89% - 92%]';
-      } else if (state.is_trading_allowed && state.down_prob >= 0.85 && state.down_prob <= 0.90 && state.initial_side === 'Up') {
+        badgeDown.textContent = 'INITIAL RANGE QUALIFIED [89% - 91%]';
+      } else if (state.initial_side === 'Down' && state.down_bid !== null && state.down_bid !== undefined && state.down_bid <= 0.30) {
         badgeDown.className = 'outcome-state-badge badge-qualified-reversal';
-        badgeDown.textContent = 'REVERSAL RANGE QUALIFIED [85% - 90%]';
+        badgeDown.textContent = 'STOP-LOSS TRIGGER ZONE [≤ 30%]';
+      } else if (state.initial_side === 'Up' && state.down_prob >= 0.85) {
+        badgeDown.className = 'outcome-state-badge badge-qualified-reversal';
+        badgeDown.textContent = 'OPPOSING SURGE [EARLY EXIT ZONE]';
       } else {
         badgeDown.className = 'outcome-state-badge badge-neutral';
         badgeDown.textContent = state.is_trading_allowed ? 'In Trading Window' : 'Waiting Phase';
@@ -417,28 +423,34 @@ function renderState(state) {
 
   // 5. Strategy step progression
   const stepInit = document.getElementById('step-initial');
+  const titleInit = document.getElementById('title-step-initial');
   const descInit = document.getElementById('desc-step-initial');
   const stepRev = document.getElementById('step-reversal');
+  const titleRev = document.getElementById('title-step-reversal');
   const descRev = document.getElementById('desc-step-reversal');
+
+  const curBudget = (state.capital && state.capital.current_initial_budget) || 2;
+  if (titleInit) titleInit.textContent = `Initial Entry ($${curBudget}.00)`;
+  if (titleRev) titleRev.textContent = 'Early Exit Stop-Loss (30%)';
 
   if (state.initial_order_triggered) {
     if (stepInit) stepInit.className = 'exec-step-item step-done';
-    if (descInit) descInit.textContent = `Filled: ${state.initial_side} ($1.00)`;
+    if (descInit) descInit.textContent = `Filled: ${state.initial_side} ($${curBudget}.00)`;
 
-    if (state.reversal_order_triggered) {
+    const hadEarlyExit = state.logs && state.logs.some(l => l.level === 'EARLY_EXIT');
+    if (hadEarlyExit) {
       if (stepRev) stepRev.className = 'exec-step-item step-done';
-      if (descRev) descRev.textContent = 'Filled ($10.00 Reversal)';
+      if (descRev) descRev.textContent = 'Early Exit Executed (Salvaged ~30%)';
     } else {
       if (stepRev) stepRev.className = 'exec-step-item step-active';
-      const opp = state.initial_side === 'Up' ? 'Down' : 'Up';
-      if (descRev) descRev.textContent = `Active: Monitoring ${opp} for 85%–90%`;
+      if (descRev) descRev.textContent = `Active: Stop-loss armed (liquidate if ${state.initial_side} ≤ 0.30)`;
     }
   } else {
     if (stepInit) {
       stepInit.className = state.is_trading_allowed ? 'exec-step-item step-active' : 'exec-step-item';
     }
     if (descInit) {
-      descInit.textContent = state.is_trading_allowed ? 'Active: scanning 89%–92%' : 'Waiting: gate opens at 180s';
+      descInit.textContent = state.is_trading_allowed ? 'Active: scanning 89%–91%' : 'Waiting: gate opens at 180s';
     }
     if (stepRev) stepRev.className = 'exec-step-item';
     if (descRev) descRev.textContent = 'Awaiting initial trade';
@@ -547,13 +559,16 @@ function renderPerformanceTab() {
   const ordersEl = document.getElementById('val-total-orders');
   const splitEl = document.getElementById('val-order-split');
   if (ordersEl) ordersEl.textContent = metrics.total_trades;
-  if (splitEl) splitEl.textContent = `${metrics.initial_trades} Init ($1) • ${metrics.reversal_trades} Rev ($10)`;
+  const curInitStake = (latestState && latestState.capital && latestState.capital.current_initial_budget) || 2;
+  if (splitEl) splitEl.textContent = `${metrics.initial_trades} Initial ($${curInitStake}) • Pure Early Exit`;
 
-  // Reversals & markets
+  // Model & markets
   const revCountEl = document.getElementById('val-reversals-count');
+  const revLabelEl = document.getElementById('label-reversals-count');
   const mktCountEl = document.getElementById('val-markets-count');
-  if (revCountEl) revCountEl.textContent = performanceData.reversal_events_detected;
-  if (mktCountEl) mktCountEl.textContent = `${performanceData.markets_observed} Markets Observed`;
+  if (revLabelEl) revLabelEl.textContent = 'Protected Trade Model';
+  if (revCountEl) revCountEl.textContent = 'Pure Early Exit';
+  if (mktCountEl) mktCountEl.textContent = `${performanceData.markets_observed} Markets Observed (Stop-Loss ≤ 30%)`;
 }
 
 function switchPerfTab(tabName) {
@@ -598,9 +613,15 @@ function renderTradesTable(trades) {
         pnlText = `${t.pnl_usd >= 0 ? '+' : ''}$${t.pnl_usd.toFixed(2)}`;
       }
 
-      const typeBadge = t.signal_type === 'REVERSAL'
-        ? `<span class="badge-tag-reversal">REVERSAL 10x</span>`
-        : `<span class="badge-tag-initial">INITIAL $1</span>`;
+      let typeBadge = '';
+      if (t.winner === 'EXIT_EARLY' || t.signal_type === 'EARLY_EXIT') {
+        typeBadge = `<span class="badge-tag-early-exit">EARLY EXIT 30%</span>`;
+      } else if (t.signal_type === 'REVERSAL') {
+        typeBadge = `<span class="badge-tag-reversal">REVERSAL</span>`;
+      } else {
+        const stakeVal = t.stake_usd ? Math.round(t.stake_usd) : 2;
+        typeBadge = `<span class="badge-tag-initial">INITIAL $${stakeVal}</span>`;
+      }
 
       const sideBadge = t.side === 'Up'
         ? `<span class="outcome-pill pill-up">UP</span>`
@@ -728,61 +749,72 @@ function renderCapital(cap) {
   const protCap = Number(cap.protected_capital) || 0;
   const ms44 = Boolean(cap.milestone_44_activated);
 
-  // Determine current tier
-  let currentTierText = 'TIER 1 (BASE: $1/$10)';
-  if (actCap >= 44.0) {
-    currentTierText = 'TIER 4 ($4/$40 STAKES)';
-  } else if (actCap >= 33.0) {
-    currentTierText = 'TIER 3 ($3/$30 STAKES)';
-  } else if (actCap >= 22.0 || ms44) {
-    currentTierText = 'TIER 2 ($2/$20 STAKES)';
+  // Determine current tier (Option B Tiered Compounding: $2 / $3 / $4 / $5 / $8)
+  let currentTierText = 'TIER 1 ($2 STAKE)';
+  if (totEq >= 50.0) {
+    currentTierText = 'TIER 5 ($8 STAKE)';
+  } else if (totEq >= 35.0) {
+    currentTierText = 'TIER 4 ($5 STAKE)';
+  } else if (totEq >= 25.0) {
+    currentTierText = 'TIER 3 ($4 STAKE)';
+  } else if (totEq >= 15.0) {
+    currentTierText = 'TIER 2 ($3 STAKE)';
   }
 
   // Determine milestone progression & targets
-  let targetTotal = 44.0;
-  let targetActive = 22.0;
+  let targetTotal = 15.0;
+  let targetActive = 15.0;
   let prevTotal = 11.0;
-  let nextMilestoneTitle = 'Next Milestone: Milestone 1 ($44.00 Total)';
-  let nextRewardText = 'Unlocks: <strong>$2 Initial / $20 Reversal Stakes</strong> (Tier 2)';
+  let nextMilestoneTitle = 'Next Milestone: Tier 2 ($15.00 Total)';
+  let nextRewardText = 'Unlocks: <strong>$3 Initial Stakes</strong> (Tier 2, +50% Payout)';
   let activeMarkerId = 'marker-44';
-  let pillText = 'MILESTONE 1: PENDING';
+  let pillText = 'TIER 1: $2 STAKE';
   let pillClass = 'status-pill mode-paper';
 
-  if (!ms44 && totEq < 44.0) {
-    targetTotal = 44.0;
-    targetActive = 22.0;
+  if (!ms44 && totEq < 15.0) {
+    targetTotal = 15.0;
+    targetActive = 15.0;
     prevTotal = 11.0;
-    nextMilestoneTitle = 'Next Milestone: Milestone 1 ($44.00 Total)';
-    nextRewardText = 'Unlocks: <strong>$2 Initial / $20 Reversal Stakes</strong> (Tier 2)';
+    nextMilestoneTitle = 'Next Milestone: Tier 2 ($15.00 Total)';
+    nextRewardText = 'Unlocks: <strong>$3 Initial Stakes</strong> (Tier 2, +50% Payout)';
     activeMarkerId = 'marker-44';
-    pillText = 'MILESTONE 1: PENDING';
+    pillText = 'TIER 1: $2 STAKE';
     pillClass = 'status-pill mode-paper';
-  } else if (totEq < 66.0 || actCap < 33.0) {
-    targetTotal = 66.0;
-    targetActive = 33.0;
-    prevTotal = 44.0;
-    nextMilestoneTitle = 'Next Milestone: Milestone 2 ($66.00 Total)';
-    nextRewardText = 'Unlocks: <strong>$3 Initial / $30 Reversal Stakes</strong> (Tier 3, +50% Payout)';
+  } else if (totEq < 25.0) {
+    targetTotal = 25.0;
+    targetActive = 25.0;
+    prevTotal = 15.0;
+    nextMilestoneTitle = 'Next Milestone: Tier 3 ($25.00 Total)';
+    nextRewardText = 'Unlocks: <strong>$4 Initial Stakes</strong> (Tier 3, +100% Payout)';
     activeMarkerId = 'marker-66';
-    pillText = 'MILESTONE 1: $44 REACHED';
+    pillText = 'TIER 2: $3 STAKE';
     pillClass = 'status-pill status-running';
-  } else if (totEq < 88.0 || actCap < 44.0) {
-    targetTotal = 88.0;
-    targetActive = 44.0;
-    prevTotal = 66.0;
-    nextMilestoneTitle = 'Next Milestone: Milestone 3 ($88.00 Total)';
-    nextRewardText = 'Unlocks: <strong>$4 Initial / $40 Reversal Stakes</strong> (Tier 4)';
+  } else if (totEq < 35.0) {
+    targetTotal = 35.0;
+    targetActive = 35.0;
+    prevTotal = 25.0;
+    nextMilestoneTitle = 'Next Milestone: Tier 4 ($35.00 Total)';
+    nextRewardText = 'Unlocks: <strong>$5 Initial Stakes</strong> (Tier 4)';
     activeMarkerId = 'marker-88';
-    pillText = 'MILESTONE 2: $66 REACHED';
+    pillText = 'TIER 3: $4 STAKE';
     pillClass = 'status-pill status-running';
-  } else if (totEq < 100.0 || actCap < 50.0) {
+  } else if (totEq < 50.0) {
+    targetTotal = 50.0;
+    targetActive = 50.0;
+    prevTotal = 35.0;
+    nextMilestoneTitle = 'Next Milestone: Tier 5 ($50.00 Total)';
+    nextRewardText = 'Unlocks: <strong>$8 Initial Stakes</strong> (+300% Payout)';
+    activeMarkerId = 'marker-100';
+    pillText = 'TIER 4: $5 STAKE';
+    pillClass = 'status-pill status-running';
+  } else if (totEq < 100.0) {
     targetTotal = 100.0;
     targetActive = 50.0;
-    prevTotal = 88.0;
+    prevTotal = 50.0;
     nextMilestoneTitle = 'Next Milestone: Century Club ($100.00 Total)';
     nextRewardText = 'Unlocks: <strong>10x Capital Return</strong> & Elite Tier';
     activeMarkerId = 'marker-100';
-    pillText = 'MILESTONE 3: $88 REACHED';
+    pillText = 'TIER 5: $8 STAKE';
     pillClass = 'status-pill status-running';
   } else {
     targetTotal = Math.ceil(totEq / 50.0) * 50.0;
@@ -878,7 +910,7 @@ function renderCapital(cap) {
 
   const budgetsEl = document.getElementById('val-cap-budgets');
   if (budgetsEl) {
-    budgetsEl.textContent = `$${cap.current_initial_budget || 1} Initial / $${cap.current_reversal_budget || 10} Reversal`;
+    budgetsEl.textContent = `$${cap.current_initial_budget || 2} Initial (Pure Early Exit: No Reversals)`;
   }
 
   const shutdownEl = document.getElementById('val-cap-shutdown-status');
@@ -891,11 +923,11 @@ function renderCapital(cap) {
         const mins = Math.floor((remainingSec % 3600) / 60);
         shutdownEl.textContent = `SHUTDOWN ACTIVE (Halting 12h • Resumes in ${hours}h ${mins}m)`;
       } else {
-        shutdownEl.textContent = `SHUTDOWN ACTIVE (${cap.daily_shutdown_reason || 'Reversal failed'})`;
+        shutdownEl.textContent = `SHUTDOWN ACTIVE (${cap.daily_shutdown_reason || 'Daily loss limit'})`;
       }
       shutdownEl.style.color = 'var(--color-red)';
     } else {
-      shutdownEl.textContent = `CLEAR (Rev: ${cap.daily_failed_reversal_count || 0}/1)`;
+      shutdownEl.textContent = `CLEAR (Daily Fails: ${cap.daily_failed_initial_count || 0}/3)`;
       shutdownEl.style.color = 'var(--text-primary)';
     }
   }
