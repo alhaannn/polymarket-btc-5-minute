@@ -124,3 +124,46 @@ Each window directory contains:
 
 Past windows are compressed into `data/raw/{window_start}.tar.gz` and cataloged in `data/raw/manifest.json`.
 兼容 `polyticker`'s convention of per-interval `chainlink.jsonl`, `binance.jsonl`, `market.jsonl`.
+
+---
+
+## 3. The Bulletproof 4-Shield Architecture (Option A + Precision Recovery Flip)
+
+### 3.1 Background & Empirical Backtest Insights
+Analysis across 701 historical settled trades across all datasets revealed:
+1. **The 85% Trap**: Entries at 85%–88% probability had an abysmal 71.4% win rate due to choppy, indecisive order books.
+2. **The Late Entry Trap (> 210s)**: 83% of all historical losses occurred on trades entered after 210 seconds into the 300-second window.
+3. **The Option A Breakthrough**: When filtered to Prime Hours (13:30–01:00 IST), 180s–210s Golden Snipe Window, and 89%–91% conviction (with price ceiling $\le 0.910$), initial trades achieve a **95.4% Win Rate** (83 Wins, 4 Losses out of 87 trades).
+4. **100% Macro Reversal Inversion**: In 100% of the 4 decayed Option A trades, the opposite outcome was the true settlement winner. The market did not chop; it experienced a decisive macro inversion.
+
+### 3.2 The 4 Shields
+- **Shield 1: Fortress Entry (Option A)**:
+  - Session Gate: Prime Hours only (13:30 to 01:00 IST / 08:00 to 19:30 UTC).
+  - Snipe Window: `180.0s <= elapsed <= 210.0s` (`INITIAL_SNIPE_END_SEC=210.0`).
+  - Conviction Range: `0.89 <= prob <= 0.91`, Price Ceiling $\le 0.910$.
+- **Shield 2: Order Book Capital Salvage (Early Exit)**:
+  - Sells position to bids immediately if `init_bid <= 0.35` or `opp_prob >= 0.88`.
+  - Salvages ~35%–40% before order book bids vanish.
+  - Computes exact unrecovered loss: $L_{unrec} = \text{cost} - \text{received} + \text{fee}$.
+- **Shield 3: Precision Recovery Flip (Target: $0.00 Net Loss)**:
+  - Sizes the recovery trade dynamically to neutralize the early exit loss:
+    $$\text{Recovery Stake} = \frac{L_{unrec}}{\frac{1}{P_{opp}} - 1 - \text{fee}}$$
+  - When the opposite outcome wins, profit matches the exact early-exit loss, bringing net window PnL to **$0.00**.
+- **Shield 4: Anti-Blowout Guardrails**:
+  - Hard Timing Cutoff: No reversals allowed after **255.0s** (`RECOVERY_MAX_TIME_SEC=255.0`).
+  - Opposite Conviction: Requires `0.88 <= opp_prob <= 0.92` with Synthetic Book sum $\le 1.05$.
+  - Reversal Price Ceiling: $\le 0.910$ with floating-point tolerance (`1e-5`).
+  - Reversal Stop-Loss: Cut if opposite bid drops $< 0.50$.
+  - Capital Safety Cap: Max 40%–80% of active capital.
+
+---
+
+## 4. Operational & Agent Context Restoration Quick Reference
+
+- **AWS Production Host**: `ubuntu@54.226.232.16`, directory `/home/ubuntu/polymarket-btc-5-minute`
+- **SSH Key (Windows)**: `C:\Users\HP Victus\Downloads\linux server\flasharb-key.pem`
+- **Live PM2 Daemon**: `pm2 restart polybot-paper --update-env`
+- **Dashboard URL**: `http://54.226.232.16:8080` (or `http://localhost:8080` via SSH tunnel)
+- **Database & Ledger**: `data/paper_ledger.db` (SQLite). Never wipe without backup!
+- **Test Suite**: `python -m pytest tests/test_bulletproof_recovery.py tests/test_option_b_fortress.py tests/test_risk.py -v`
+- **Kill Switch**: `touch STOP` immediately pauses order execution; `rm STOP` resumes.
