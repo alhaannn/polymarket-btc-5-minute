@@ -17,7 +17,7 @@
       <div class="brand-icon">PM</div>
       <div class="brand-text">
         <h1 class="brand-title">Polymarket 5-Minute Trading Workstation</h1>
-        <div class="brand-subtitle">Prime-Hours Fortress &bull; Pure Early Exit (30% Stop-Loss) &bull; Paper Trading Only</div>
+        <div class="brand-subtitle">Bulletproof 4-Shield Architecture &bull; Option A Snipe (180–210s) &bull; Precision Recovery Flip ($0 Net Loss)</div>
       </div>
     </div>
 
@@ -136,7 +136,7 @@
           <h2 class="card-title">Live Outcome Probabilities & Strategy Triggers</h2>
         </div>
         <div class="strategy-rule-info" id="strategy-rule-info">
-          Initial: <span class="rule-highlight">85%–90% (Price ≤ 0.900)</span> | Early Exit: <span class="rule-highlight">≤30% Stop-Loss</span>
+          Initial Snipe: <span class="rule-highlight">89%–91% (180s–210s, Price ≤ 0.910)</span> | Early Exit: <span class="rule-highlight">≤35% Salvage</span> | Recovery Flip: <span class="rule-highlight">≥88% ($0 Net Loss)</span>
         </div>
       </div>
 
@@ -153,8 +153,8 @@
           </div>
           <div class="prob-gauge-track">
             <div class="prob-gauge-fill gauge-up" id="gauge-up" style="width: 0%;"></div>
-            <div class="target-band target-initial" title="Initial Trigger Band: 85% - 90%"></div>
-            <div class="target-band target-reversal" title="Early Exit Stop-Loss Zone: ≤ 30%"></div>
+            <div class="target-band target-initial" title="Initial Snipe Band: 89% - 91% (180s - 210s)"></div>
+            <div class="target-band target-reversal" title="Early Exit Stop-Loss Zone: ≤ 35%"></div>
           </div>
           <div class="outcome-state-badge badge-neutral" id="badge-up-status">Awaiting Trading Window</div>
         </div>
@@ -171,8 +171,8 @@
           </div>
           <div class="prob-gauge-track">
             <div class="prob-gauge-fill gauge-down" id="gauge-down" style="width: 0%;"></div>
-            <div class="target-band target-initial" title="Initial Trigger Band: 85% - 90%"></div>
-            <div class="target-band target-reversal" title="Early Exit Stop-Loss Zone: ≤ 30%"></div>
+            <div class="target-band target-initial" title="Initial Snipe Band: 89% - 91% (180s - 210s)"></div>
+            <div class="target-band target-reversal" title="Early Exit Stop-Loss Zone: ≤ 35%"></div>
           </div>
           <div class="outcome-state-badge badge-neutral" id="badge-down-status">Awaiting Trading Window</div>
         </div>
@@ -183,24 +183,24 @@
         <div class="exec-step-item" id="step-initial">
           <div class="step-icon" id="icon-step-initial">1</div>
           <div class="step-content">
-            <div class="step-title" id="title-step-initial">Initial Entry</div>
-            <div class="step-desc" id="desc-step-initial">Monitoring for 85%–90% (Price ≤ 0.900)</div>
+            <div class="step-title" id="title-step-initial">Initial Snipe (Option A)</div>
+            <div class="step-desc" id="desc-step-initial">Monitoring for 89%–91% (180s–210s, Price ≤ 0.910)</div>
           </div>
         </div>
         <div class="step-arrow">&rarr;</div>
         <div class="exec-step-item" id="step-reversal">
           <div class="step-icon" id="icon-step-reversal">2</div>
           <div class="step-content">
-            <div class="step-title" id="title-step-reversal">Early Exit Stop-Loss (30%)</div>
-            <div class="step-desc" id="desc-step-reversal">Auto-liquidates at ≤ 0.30 to salvage stake</div>
+            <div class="step-title" id="title-step-reversal">Early Exit Salvage (≤35%)</div>
+            <div class="step-desc" id="desc-step-reversal">Auto-salvages ~35% on book bids if decay occurs</div>
           </div>
         </div>
         <div class="step-arrow">&rarr;</div>
         <div class="exec-step-item" id="step-settlement">
           <div class="step-icon" id="icon-step-settlement">3</div>
           <div class="step-content">
-            <div class="step-title" id="title-step-settlement">Resolution / Settlement</div>
-            <div class="step-desc" id="desc-step-settlement">Binary win ($1.00) or early salvage</div>
+            <div class="step-title" id="title-step-settlement">Precision Recovery Flip</div>
+            <div class="step-desc" id="desc-step-settlement">Opposite breakout (≤255s) targets $0.00 Net Loss</div>
           </div>
         </div>
       </div>
@@ -346,9 +346,9 @@
           <div class="metric-sublabel" id="val-order-split">0 Initial &bull; Pure Early Exit</div>
         </div>
         <div class="metric-card">
-          <div class="metric-label" id="label-reversals-count">Protected Trade Model</div>
-          <div class="metric-large" id="val-reversals-count">Pure Early Exit</div>
-          <div class="metric-sublabel" id="val-markets-count">Stop-Loss at ≤ 30%</div>
+          <div class="metric-label" id="label-reversals-count">Execution Architecture</div>
+          <div class="metric-large" id="val-reversals-count" style="font-size: 16px;">4-Shield Recovery</div>
+          <div class="metric-sublabel" id="val-markets-count">Precision Flip ($0 Net Loss)</div>
         </div>
       </div>
     </section>
