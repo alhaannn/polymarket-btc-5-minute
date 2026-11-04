@@ -121,6 +121,7 @@ class StrategyConfig:
     prime_hours_only: bool = True
     enable_reversals: bool = True
     price_ceiling: float = 0.910
+    reversal_price_ceiling: float = 0.930
     reversal_debounce_sec: float = 0.0
     early_exit: bool = False
     exit_p: float = 0.35
@@ -169,6 +170,7 @@ class StrategyConfig:
             prime_hours_only=_get_env_val("PRIME_HOURS_ONLY", True, bool),
             enable_reversals=_get_env_val("ENABLE_REVERSALS", True, bool),
             price_ceiling=_get_env_val("PRICE_CEILING", 0.910, float),
+            reversal_price_ceiling=_get_env_val("REVERSAL_PRICE_CEILING", 0.930, float),
             reversal_debounce_sec=_get_env_val("REVERSAL_DEBOUNCE_SEC", 0.0, float),
             recovery_flip_mode=os.getenv("RECOVERY_FLIP_MODE", "precision"),
             recovery_max_time_sec=_get_env_val("RECOVERY_MAX_TIME_SEC", 255.0, float),

@@ -664,7 +664,7 @@ class ReversalStrategy(BaseStrategy):
 
                         avg_price, shares, spent = fill
                         # Price ceiling check on reversal
-                        price_ceil = getattr(self.config, "price_ceiling", 0.910)
+                        price_ceil = getattr(self.config, "reversal_price_ceiling", 0.930)
                         if avg_price > price_ceil + 1e-5:
                             log.info("ReversalStrategy %s avg_price %.3f exceeds price ceiling %.3f", opp_side, avg_price, price_ceil)
                             return None

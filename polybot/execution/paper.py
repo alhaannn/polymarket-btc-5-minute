@@ -43,6 +43,7 @@ class PaperExecutionEngine(ExecutionEngine):
         self.open_positions_list: List[Position] = []
         self.settled_positions: List[Position] = []
         self.all_fills: List[Fill] = []
+        self.on_order_rejected: Optional[Any] = None
 
     def submit_order(self, order: Order) -> Order:
         """Enqueue order into the pending execution queue."""
@@ -109,6 +110,12 @@ class PaperExecutionEngine(ExecutionEngine):
                 fill = self._execute_taker(order, current_ts, book, opp_book=opp_book)
                 if fill:
                     new_fills.append(fill)
+                elif order.status == "REJECTED":
+                    if getattr(self, "on_order_rejected", None):
+                        try:
+                            self.on_order_rejected(order, getattr(order, "reject_reason", "fill rejected"))
+                        except Exception as e:
+                            log.error("Error in on_order_rejected callback: %s", e)
                 self.pending_orders.remove(order)
 
             elif order.order_type == "maker":
@@ -133,6 +140,7 @@ class PaperExecutionEngine(ExecutionEngine):
             sim = book.simulate_buy(order.usd_amount, opposing_bids=opp_bids)
             if sim is None:
                 order.status = "REJECTED"
+                order.reject_reason = f"insufficient depth for {order.slug} {order.side}"
                 log.warning("Taker BUY rejected for %s %s: insufficient depth", order.slug, order.side)
                 return None
 
@@ -142,20 +150,24 @@ class PaperExecutionEngine(ExecutionEngine):
 
             if slippage > self.config.max_slippage:
                 order.status = "REJECTED"
+                order.reject_reason = f"slippage {slippage * 100.0:.2f}% > max {self.config.max_slippage * 100.0:.2f}%"
                 log.warning(
-                    "Taker BUY rejected: slippage %.2f%% > max %.2f%%",
-                    slippage * 100.0, self.config.max_slippage * 100.0
+                    "Taker BUY rejected: %s", order.reject_reason
                 )
                 return None
 
             # Hard Price Ceiling enforcement at fill time (Option B safeguard for reversal strategy)
             if getattr(self.config, "strategy_name", "") == "reversal":
-                price_ceil = getattr(self.config, "price_ceiling", 0.985)
-                if avg_price > price_ceil:
+                if order.signal_type == "REVERSAL":
+                    price_ceil = getattr(self.config, "reversal_price_ceiling", 0.930)
+                else:
+                    price_ceil = getattr(self.config, "price_ceiling", 0.910)
+                if avg_price > price_ceil + 1e-5:
                     order.status = "REJECTED"
+                    order.reject_reason = f"fill price {avg_price:.3f} exceeds price ceiling {price_ceil:.3f}"
                     log.warning(
-                        "Taker BUY rejected: fill price %.3f exceeds price ceiling %.3f (post-latency slip)",
-                        avg_price, price_ceil
+                        "Taker BUY rejected: %s fill price %.3f exceeds price ceiling %.3f (post-latency slip)",
+                        order.signal_type, avg_price, price_ceil
                     )
                     return None
 
@@ -190,6 +202,7 @@ class PaperExecutionEngine(ExecutionEngine):
             sim = book.simulate_sell(order.shares)
             if sim is None:
                 order.status = "REJECTED"
+                order.reject_reason = "insufficient bid depth"
                 log.warning("Taker SELL rejected: insufficient bid depth")
                 return None
 

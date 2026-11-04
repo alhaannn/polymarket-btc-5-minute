@@ -160,7 +160,7 @@ def test_reversal_hard_timing_cutoff():
 
 
 def test_reversal_price_ceiling():
-    """Verify reversal flip is rejected if opposite ask exceeds price ceiling (e.g. 0.92 > 0.910)."""
+    """Verify reversal flip allows up to reversal_price_ceiling (0.930) and rejects above it (e.g. 0.940)."""
     cfg = StrategyConfig(
         prime_hours_only=False,
         reversal_window_start_sec=180.0,
@@ -171,6 +171,7 @@ def test_reversal_price_ceiling():
         reversal_prob_min=0.88,
         reversal_prob_max=0.95,
         price_ceiling=0.910,
+        reversal_price_ceiling=0.930,
         early_exit=True,
         exit_p=0.35,
         enable_reversals=True,
@@ -181,10 +182,85 @@ def test_reversal_price_ceiling():
     books_init = create_mock_books(up_ask=0.90, down_ask=0.10)
     strat.on_tick(current_price=80000.0, timestamp_sec=1190.0, books=books_init)
 
-    books_decay = create_mock_books(up_ask=0.08, down_ask=0.92)
-    strat.on_tick(current_price=80000.0, timestamp_sec=1220.0, books=books_decay)
+    # 1. 0.920 is within reversal_price_ceiling (0.930) -> accepted!
+    books_decay_92 = create_mock_books(up_ask=0.08, down_ask=0.92)
+    strat.on_tick(current_price=80000.0, timestamp_sec=1220.0, books=books_decay_92)
     assert strat.early_exit_placed
 
-    # Opposite ask is 0.92, which exceeds price ceiling 0.910 -> REJECTED!
-    sig_rev = strat.on_tick(current_price=80000.0, timestamp_sec=1225.0, books=books_decay)
-    assert sig_rev is None, "Should reject reversal if price > price_ceiling 0.910"
+    sig_rev = strat.on_tick(current_price=80000.0, timestamp_sec=1225.0, books=books_decay_92)
+    assert sig_rev is not None
+    assert sig_rev.signal_type == "REVERSAL"
+    assert sig_rev.price <= 0.930
+
+    # Reset reversal state to test price above ceiling
+    strat.reversal_order_placed = False
+
+    # 2. Opposite ask is 0.940, which exceeds reversal_price_ceiling 0.930 -> REJECTED!
+    books_decay_94 = create_mock_books(up_ask=0.06, down_ask=0.94)
+    sig_rev_94 = strat.on_tick(current_price=80000.0, timestamp_sec=1230.0, books=books_decay_94)
+    assert sig_rev_94 is None, "Should reject reversal if price > reversal_price_ceiling 0.930"
+
+
+def test_paper_execution_reversal_ceiling_and_unlatch():
+    """Verify PaperExecutionEngine allows 0.920 for REVERSAL but rejects 0.920 for INITIAL, and invokes callback."""
+    from polybot.execution.paper import PaperExecutionEngine
+    from polybot.execution.base import Order
+
+    cfg = StrategyConfig(
+        strategy_name="reversal",
+        price_ceiling=0.910,
+        reversal_price_ceiling=0.930,
+        max_slippage=0.05,
+        latency_ms=10,
+    )
+    engine = PaperExecutionEngine(cfg)
+
+    rejected_events = []
+    def on_rejected(order, reason):
+        rejected_events.append((order.signal_type, reason))
+
+    engine.on_order_rejected = on_rejected
+
+    books = create_mock_books(up_ask=0.92, down_ask=0.08)
+
+    # 1. INITIAL order at 0.920 -> Rejected by price_ceiling (0.910)
+    init_order = Order(
+        order_id="ord-init-1",
+        slug="btc-updown-5m-1000",
+        side="Up",
+        action="BUY",
+        order_type="taker",
+        price=0.92,
+        usd_amount=1.0,
+        shares=1.087,
+        created_at_ts=100.0,
+        latency_ms=10,
+        signal_type="INITIAL",
+    )
+    engine.submit_order(init_order)
+    fills = engine.process_pending_orders(current_ts=100.05, books=books)
+    assert len(fills) == 0
+    assert init_order.status == "REJECTED"
+    assert len(rejected_events) == 1
+    assert rejected_events[0][0] == "INITIAL"
+    assert "exceeds price ceiling 0.910" in rejected_events[0][1]
+
+    # 2. REVERSAL order at 0.920 -> Accepted because reversal_price_ceiling is 0.930!
+    rev_order = Order(
+        order_id="ord-rev-1",
+        slug="btc-updown-5m-1000",
+        side="Up",
+        action="BUY",
+        order_type="taker",
+        price=0.92,
+        usd_amount=5.0,
+        shares=5.43,
+        created_at_ts=101.0,
+        latency_ms=10,
+        signal_type="REVERSAL",
+    )
+    engine.submit_order(rev_order)
+    fills_rev = engine.process_pending_orders(current_ts=101.05, books=books)
+    assert len(fills_rev) == 1
+    assert rev_order.status == "FILLED"
+    assert fills_rev[0].price == pytest.approx(0.92, abs=0.001)

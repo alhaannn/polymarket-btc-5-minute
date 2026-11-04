@@ -201,6 +201,21 @@ async def run_paper(config: PolybotConfig, demo: bool = False, reset: bool = Fal
     is_paused = False
     last_rest_poll_ts = 0.0
 
+    def handle_order_rejected(rej_order: Order, reason: str):
+        if hasattr(strat, "on_order_rejected"):
+            strat.on_order_rejected(rej_order.signal_type, cooldown_sec=1.0, current_ts=time.time())
+        if hasattr(risk, "record_trade_rejected"):
+            risk.record_trade_rejected(rej_order.usd_amount)
+        nonlocal open_trades_to_settle
+        open_trades_to_settle = [
+            it for it in open_trades_to_settle
+            if it.get("order_id") != rej_order.order_id
+        ]
+        dash_state.add_log("REJECTED", f"{rej_order.signal_type} fill rejected: {reason}")
+        log.warning("[ORDER_REJECTED_CALLBACK] %s fill rejected (%s) - state unlatched", rej_order.signal_type, reason)
+
+    engine.on_order_rejected = handle_order_rejected
+
     dash_state.add_log("INFO", f"Bot initialized with {config.strategy.strategy_name} strategy")
 
     try:
@@ -322,6 +337,7 @@ async def run_paper(config: PolybotConfig, demo: bool = False, reset: bool = Fal
                     f"Paper fill: {f.signal_type} {f.side} {f.shares:.2f}sh @ ${f.price:.3f} (${f.cost_usd:.2f})"
                 )
                 if f.action == "SELL":
+                    open_trades_to_settle = [it for it in open_trades_to_settle if it.get("slug") != f.slug]
                     closed_pos = next((p for p in engine.settled_positions if p.order_id == f.linked_order_id or p.slug == f.slug), None)
                     if closed_pos:
                         risk.record_trade_settled(closed_pos.realized_pnl_usd, closed_pos.total_cost_usd, current_window_idx)
@@ -463,7 +479,6 @@ async def run_paper(config: PolybotConfig, demo: bool = False, reset: bool = Fal
                             data_receipt_ts=sig.data_receipt_ts,
                         )
                         engine.submit_order(order)
-                        open_trades_to_settle = [it for it in open_trades_to_settle if it["slug"] != sig.slug]
                         dash_state.add_log(
                             "EARLY_EXIT",
                             f"Early exit sell placed: {order.order_id} ({sig.side} {sig.shares:.2f} shs @ ${sig.price:.3f})"
@@ -542,6 +557,7 @@ async def run_paper(config: PolybotConfig, demo: bool = False, reset: bool = Fal
                         risk.record_trade_placed(stake_usd)
                         open_trades_to_settle.append({
                             "slug": sig.slug,
+                            "order_id": order.order_id,
                             "cost": stake_usd,
                             "window_idx": current_window_idx,
                             "window_end": (current_window_idx + 1) * 300,

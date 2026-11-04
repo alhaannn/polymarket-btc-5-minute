@@ -53,6 +53,10 @@ class RiskManager:
         self.daily_trades += 1
         self.current_open_exposure += cost_usd
 
+    def record_trade_rejected(self, cost_usd: float) -> None:
+        self.daily_trades = max(0, self.daily_trades - 1)
+        self.current_open_exposure = max(0.0, self.current_open_exposure - cost_usd)
+
     def record_trade_settled(self, pnl_usd: float, cost_usd: float, current_window_idx: int) -> None:
         self._check_day_rollover()
         self.daily_pnl += pnl_usd

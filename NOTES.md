@@ -152,7 +152,8 @@ Analysis across 701 historical settled trades across all datasets revealed:
 - **Shield 4: Anti-Blowout Guardrails**:
   - Hard Timing Cutoff: No reversals allowed after **255.0s** (`RECOVERY_MAX_TIME_SEC=255.0`).
   - Opposite Conviction: Requires `0.88 <= opp_prob <= 0.92` with Synthetic Book sum $\le 1.05$.
-  - Reversal Price Ceiling: $\le 0.910$ with floating-point tolerance (`1e-5`).
+  - Reversal Price Ceiling: $\le 0.930$ (distinguished from initial entry ceiling $\le 0.910$ to prevent fill rejection on opposing side up to 0.920) with floating-point tolerance (`1e-5`).
+  - Execution Engine Rejection Callback: On fill rejection (due to slippage or ceiling), engine calls `on_order_rejected` to unlatch strategy state immediately, purges `open_trades_to_settle`, and decrements risk exposure.
   - Reversal Stop-Loss: Cut if opposite bid drops $< 0.50$.
   - Capital Safety Cap: Max 40%–80% of active capital.
 
