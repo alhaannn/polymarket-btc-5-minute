@@ -109,7 +109,7 @@ class DynamicTradeBudgetCalculator:
             return 0
         canonical_rev = self.calculate_reversal_budget(active_capital_usd)
         free_active = max(0.0, active_capital_usd - open_exposure_usd)
-        max_affordable = math.floor(free_active / (1.0 + self.taker_fee_rate))
+        max_affordable = math.floor(free_active + 1e-4)
         return int(max(0, min(canonical_rev, max_affordable)))
 
     def validate_order_budget(
@@ -177,11 +177,11 @@ class DynamicTradeBudgetCalculator:
                 reason=f"Calculated budget ${calc_budget:.2f} is below minimum allowed order ${self.min_order_usd:.2f}.",
             )
 
-        # 5. Check free active funds sufficiency (including fees)
-        if total_required > free_active:
+        # 5. Check free active funds sufficiency
+        if calc_budget > free_active + 1e-4:
             # If adaptive clamping is enabled, attempt to downsize whole-dollar budget to available free funds
             if allow_adaptive_clamping:
-                max_affordable = math.floor(free_active / (1.0 + self.taker_fee_rate))
+                max_affordable = math.floor(free_active + 1e-4)
                 if max_affordable >= self.min_order_usd:
                     approved_budget = float(max_affordable)
                     clamped_fee = round(approved_budget * self.taker_fee_rate, 4)

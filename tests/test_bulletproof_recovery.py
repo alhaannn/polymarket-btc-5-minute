@@ -264,3 +264,39 @@ def test_paper_execution_reversal_ceiling_and_unlatch():
     assert len(fills_rev) == 1
     assert rev_order.status == "FILLED"
     assert fills_rev[0].price == pytest.approx(0.92, abs=0.001)
+
+
+def test_pure_1_dollar_initial_and_10_dollar_reversal():
+    """Verify classic $1 initial and $10 reversal mode with early_exit=False."""
+    cfg = StrategyConfig(
+        prime_hours_only=False,
+        early_exit=False,
+        enable_reversals=True,
+        initial_prob_min=0.89,
+        initial_prob_max=0.91,
+        reversal_prob_min=0.88,
+        reversal_prob_max=0.92,
+        reversal_price_ceiling=0.930,
+        initial_stake_usd=1.0,
+        reversal_stake_usd=10.0,
+    )
+    strat = ReversalStrategy(cfg)
+    strat.reset_window(window_start=1000)
+    strat.set_dynamic_budgets(initial_usd=1.0, reversal_usd=10.0)
+
+    # 1. Initial Snipe at 195s ($1.00 @ 0.90)
+    b_init = create_mock_books(up_ask=0.90, down_ask=0.10)
+    sig1 = strat.on_tick(current_price=80000.0, timestamp_sec=1195.0, books=b_init)
+    assert sig1 is not None
+    assert sig1.signal_type == "INITIAL"
+    assert sig1.cost_usd == 1.0
+    assert sig1.side == "Up"
+
+    # 2. Market swings to Down @ 225s ($10.00 @ 0.90)
+    b_rev = create_mock_books(up_ask=0.10, down_ask=0.90)
+    sig2 = strat.on_tick(current_price=80000.0, timestamp_sec=1225.0, books=b_rev)
+    assert sig2 is not None
+    assert sig2.signal_type == "REVERSAL"
+    assert sig2.cost_usd == 10.0
+    assert sig2.side == "Down"
+    assert sig2.linked_order_id == strat.initial_order_id
