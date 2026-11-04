@@ -40,7 +40,20 @@ def create_dashboard_app(
         return FileResponse(index_file)
 
     async def get_state(request: Request) -> JSONResponse:
-        return JSONResponse(state.to_dict())
+        state_dict = state.to_dict()
+        shutdown_active = capital_mgr.is_daily_shutdown_active() if capital_mgr else False
+        shutdown_until = capital_mgr.state.shutdown_until_ts if capital_mgr else None
+        recent_trades = ledger.get_recent_trades(limit=500) if ledger else None
+        from polybot.tz import compute_schedule_state
+        sched = compute_schedule_state(
+            prime_hours_only=getattr(state, "prime_hours_only", True),
+            shutdown_active=shutdown_active,
+            shutdown_until_ts=shutdown_until,
+            trades=recent_trades,
+        )
+        state_dict["schedule"] = sched
+        state.update_schedule_state(sched)
+        return JSONResponse(state_dict)
 
     async def get_performance(request: Request) -> JSONResponse:
         summary = ledger.get_performance_summary()

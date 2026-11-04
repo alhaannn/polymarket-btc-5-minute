@@ -28,6 +28,9 @@
       <div class="status-pill status-running" id="pill-bot-status">
         <span class="status-dot" id="dot-bot-status"></span> <span id="text-bot-status">RUNNING</span>
       </div>
+      <div class="status-pill status-resting" id="pill-schedule-status" title="Bot operating schedule status">
+        <span class="status-dot" id="dot-schedule-status"></span> <span id="text-schedule-status">RESTING</span>
+      </div>
       <div class="status-pill feed-live" id="pill-feed-status">
         <span class="status-dot" id="dot-feed-status"></span> <span id="text-feed-status">FEED: LIVE</span>
       </div>
@@ -48,6 +51,38 @@
 
   <!-- Main Workstation Layout -->
   <main class="dashboard-grid">
+
+    <!-- Operating Schedule & Work/Rest Session Banner -->
+    <section class="card schedule-banner-card" id="card-schedule-banner">
+      <div class="schedule-banner-inner">
+        <!-- Status & Schedule Details -->
+        <div class="schedule-banner-left">
+          <div class="schedule-pill-group">
+            <span class="schedule-status-badge badge-resting" id="badge-work-rest">
+              <span class="status-dot"></span> <span id="text-work-rest-badge">RESTING</span>
+            </span>
+            <span class="schedule-window-tag" id="tag-schedule-window">PRIME HOURS: 13:30 – 01:00 IST</span>
+          </div>
+          <div class="schedule-desc" id="desc-schedule-reason">
+            Off-hours resting &bull; Shielding balance from low liquidity &amp; wide spreads
+          </div>
+        </div>
+
+        <!-- Timer: Time until start OR Active duration -->
+        <div class="schedule-banner-mid">
+          <div class="schedule-metric-label" id="lbl-schedule-timer">TIME UNTIL WORK STARTS</div>
+          <div class="schedule-metric-value" id="val-schedule-timer">--:--:--</div>
+          <div class="schedule-metric-sub" id="sub-schedule-timer">Opens at 13:30:00 IST</div>
+        </div>
+
+        <!-- Session PnL & Trades -->
+        <div class="schedule-banner-right">
+          <div class="schedule-metric-label">SESSION P&amp;L (SINCE WORKING)</div>
+          <div class="schedule-metric-value pnl-neutral" id="val-schedule-session-pnl">$0.00</div>
+          <div class="schedule-metric-sub" id="sub-schedule-session-trades">0 trades in current session</div>
+        </div>
+      </div>
+    </section>
 
     <!-- Row 1: Market Session Clock & Countdown -->
     <section class="card market-session-card" id="card-market-session">

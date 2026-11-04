@@ -21,6 +21,9 @@ const archivePages = {
   logs: 1,
 };
 
+let currentSchedule = null;
+let lastScheduleReceiptTs = 0;
+
 document.addEventListener('DOMContentLoaded', () => {
   initPolling();
   updateClockIST();
@@ -32,6 +35,7 @@ function updateClockIST() {
   const timeStr = now.toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour12: false });
   const el = document.getElementById('clock-time');
   if (el) el.textContent = timeStr;
+  tickScheduleTimer();
 }
 
 function formatISTTime(unixSec) {
@@ -137,7 +141,127 @@ function setFeedStatusDisconnected() {
   }
 }
 
+function formatDurationSec(sec) {
+  const s = Math.max(0, Math.round(sec));
+  const hours = Math.floor(s / 3600);
+  const mins = Math.floor((s % 3600) / 60);
+  const secs = s % 60;
+  if (hours > 0) {
+    return `${hours}h ${String(mins).padStart(2, '0')}m ${String(secs).padStart(2, '0')}s`;
+  } else if (mins > 0) {
+    return `${mins}m ${String(secs).padStart(2, '0')}s`;
+  } else {
+    return `${secs}s`;
+  }
+}
+
+function renderSchedule(sched) {
+  if (!sched) return;
+  currentSchedule = sched;
+  lastScheduleReceiptTs = Date.now();
+
+  const isWorking = !!sched.is_working;
+
+  // 1. Header Pill
+  const schedPill = document.getElementById('pill-schedule-status');
+  const schedText = document.getElementById('text-schedule-status');
+  if (schedPill && schedText) {
+    if (isWorking) {
+      schedPill.className = 'status-pill status-working';
+      schedText.textContent = `WORKING • Active ${sched.working_elapsed_formatted}`;
+    } else {
+      schedPill.className = 'status-pill status-resting';
+      schedText.textContent = `RESTING • Starts in ${sched.time_left_to_start_formatted}`;
+    }
+  }
+
+  // 2. Banner Badge
+  const badgeEl = document.getElementById('badge-work-rest');
+  const badgeText = document.getElementById('text-work-rest-badge');
+  if (badgeEl && badgeText) {
+    if (isWorking) {
+      badgeEl.className = 'schedule-status-badge badge-working';
+      badgeText.textContent = 'WORKING (ACTIVE)';
+    } else {
+      badgeEl.className = 'schedule-status-badge badge-resting';
+      badgeText.textContent = sched.status || 'RESTING';
+    }
+  }
+
+  // 3. Window & Reason Tags
+  const windowTag = document.getElementById('tag-schedule-window');
+  if (windowTag) {
+    windowTag.textContent = sched.prime_hours_only ? `PRIME HOURS: ${sched.schedule_window}` : '24/7 CONTINUOUS MODE';
+  }
+
+  const reasonDesc = document.getElementById('desc-schedule-reason');
+  if (reasonDesc) {
+    reasonDesc.textContent = sched.reason || '';
+  }
+
+  // 4. Timer Box
+  const timerLbl = document.getElementById('lbl-schedule-timer');
+  const timerVal = document.getElementById('val-schedule-timer');
+  const timerSub = document.getElementById('sub-schedule-timer');
+  if (timerLbl && timerVal && timerSub) {
+    if (isWorking) {
+      timerLbl.textContent = 'ACTIVE WORK DURATION';
+      timerVal.textContent = sched.working_elapsed_formatted;
+      timerSub.textContent = `Closes at ${sched.session_end_str} (${sched.working_remaining_formatted} left)`;
+    } else {
+      timerLbl.textContent = 'TIME UNTIL WORK STARTS';
+      timerVal.textContent = sched.time_left_to_start_formatted;
+      timerSub.textContent = `Opens at ${sched.next_start_str || '13:30:00 IST'}`;
+    }
+  }
+
+  // 5. Session PnL & Trades
+  const pnlVal = document.getElementById('val-schedule-session-pnl');
+  const pnlSub = document.getElementById('sub-schedule-session-trades');
+  if (pnlVal && pnlSub) {
+    const pnl = Number(sched.session_pnl_usd || 0);
+    const sign = pnl > 0 ? '+' : '';
+    pnlVal.textContent = `${sign}$${pnl.toFixed(2)}`;
+    pnlVal.className = 'schedule-metric-value ' + (pnl > 0 ? 'text-green' : pnl < 0 ? 'text-red' : 'pnl-neutral');
+
+    const trades = sched.session_trades_count || 0;
+    const wins = sched.session_wins || 0;
+    const losses = sched.session_losses || 0;
+    if (trades === 0) {
+      pnlSub.textContent = isWorking ? 'No trades yet in this active session' : '0 trades (waiting for next session)';
+    } else {
+      pnlSub.textContent = `${trades} trade${trades > 1 ? 's' : ''} (${wins}W / ${losses}L) since session start`;
+    }
+  }
+}
+
+function tickScheduleTimer() {
+  if (!currentSchedule || !lastScheduleReceiptTs) return;
+  const elapsedSec = (Date.now() - lastScheduleReceiptTs) / 1000.0;
+  const isWorking = !!currentSchedule.is_working;
+
+  const timerVal = document.getElementById('val-schedule-timer');
+  const schedText = document.getElementById('text-schedule-status');
+
+  if (isWorking) {
+    const curElapsed = (currentSchedule.working_elapsed_sec || 0) + elapsedSec;
+    const formatted = formatDurationSec(curElapsed);
+    if (timerVal) timerVal.textContent = formatted;
+    if (schedText) schedText.textContent = `WORKING • Active ${formatted}`;
+  } else {
+    const curLeft = Math.max(0, (currentSchedule.time_left_to_start_sec || 0) - elapsedSec);
+    const formatted = formatDurationSec(curLeft);
+    if (timerVal) timerVal.textContent = formatted;
+    if (schedText) schedText.textContent = `RESTING • Starts in ${formatted}`;
+  }
+}
+
 function renderState(state) {
+  // 0. Render Schedule (Working / Resting & Session PnL)
+  if (state.schedule) {
+    renderSchedule(state.schedule);
+  }
+
   // 1. Bot status & pill
   const botPill = document.getElementById('pill-bot-status');
   const botText = document.getElementById('text-bot-status');

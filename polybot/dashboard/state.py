@@ -42,6 +42,10 @@ class DashboardState:
         self.initial_side: Optional[str] = None
         self.reversal_order_triggered: bool = False
 
+        # Schedule & Working/Resting state
+        self.prime_hours_only: bool = True
+        self.schedule_state: Optional[Dict[str, Any]] = None
+
         # Feed & Latency
         self.feed_status: str = "CONNECTING"  # CONNECTED, STALE, DISCONNECTED
         self.last_tick_receipt_ts: float = 0.0
@@ -164,6 +168,9 @@ class DashboardState:
     def update_capital(self, cap_dict: Dict[str, Any]) -> None:
         self.capital_state.update(cap_dict)
 
+    def update_schedule_state(self, sched_dict: Dict[str, Any]) -> None:
+        self.schedule_state = sched_dict
+
     def to_dict(self) -> Dict[str, Any]:
         """Snapshot of current system state for API/UI."""
         now = time.time()
@@ -173,6 +180,11 @@ class DashboardState:
             feed_quality = "STALE"
         if self.feed_status == "DISCONNECTED":
             feed_quality = "DISCONNECTED"
+
+        sched = self.schedule_state
+        if sched is None:
+            from polybot.tz import compute_schedule_state
+            sched = compute_schedule_state(prime_hours_only=self.prime_hours_only, ts=now)
 
         return {
             "bot_status": self.bot_status,
@@ -197,6 +209,7 @@ class DashboardState:
             "staleness_sec": staleness,
             "latency_ms": round(self.last_latency_ms, 1),
             "capital": self.capital_state,
+            "schedule": sched,
             "server_time": now,
             "server_time_str": ist_datetime_str(now),
             "logs": list(self.logs)[:200],

@@ -96,6 +96,7 @@ async def run_paper(config: PolybotConfig, demo: bool = False, reset: bool = Fal
     dash_state = DashboardState()
     dash_state.set_bot_status("RUNNING")
     dash_state.strategy_name = config.strategy.strategy_name
+    dash_state.prime_hours_only = getattr(config.strategy, "prime_hours_only", True)
 
     if reset:
         log.info("Reset requested: wiping trade log and reinitializing capital ledger at $11.00 starting equity")

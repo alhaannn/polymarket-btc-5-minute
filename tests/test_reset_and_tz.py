@@ -87,3 +87,62 @@ def test_reset_paper_database(tmp_path: Path):
     assert perf["timezone"] == "IST"
     assert perf["lifetime"]["total_trades"] == 0
     assert perf["lifetime"]["net_pnl_usd"] == 0.0
+
+
+def test_compute_schedule_state():
+    import datetime
+    from polybot.tz import compute_schedule_state
+
+    # 1. Test Resting at 13:00:00 IST (30 minutes before 13:30 start)
+    dt_resting = datetime.datetime(2026, 11, 4, 13, 0, 0, tzinfo=IST_TZ)
+    res_resting = compute_schedule_state(prime_hours_only=True, ts=dt_resting.timestamp())
+    assert res_resting["status"] == "RESTING"
+    assert res_resting["is_working"] is False
+    assert res_resting["time_left_to_start_sec"] == 1800.0
+    assert res_resting["time_left_to_start_formatted"] == "30m 00s"
+
+    # 2. Test Working at 14:00:00 IST (30 minutes after 13:30 start)
+    dt_working = datetime.datetime(2026, 11, 4, 14, 0, 0, tzinfo=IST_TZ)
+    res_working = compute_schedule_state(prime_hours_only=True, ts=dt_working.timestamp())
+    assert res_working["status"] == "WORKING"
+    assert res_working["is_working"] is True
+    assert res_working["working_elapsed_sec"] == 1800.0
+    assert res_working["working_elapsed_formatted"] == "30m 00s"
+    assert res_working["working_remaining_sec"] == 39600.0  # 11 hours left to 01:00
+
+    # 3. Test Working at 00:30:00 IST (past midnight, 30m before 01:00 close)
+    dt_midnight = datetime.datetime(2026, 11, 5, 0, 30, 0, tzinfo=IST_TZ)
+    res_midnight = compute_schedule_state(prime_hours_only=True, ts=dt_midnight.timestamp())
+    assert res_midnight["status"] == "WORKING"
+    assert res_midnight["is_working"] is True
+    assert res_midnight["working_remaining_sec"] == 1800.0  # 30m to 01:00
+    assert res_midnight["working_elapsed_sec"] == 39600.0  # 11 hours elapsed since 13:30 yesterday
+
+    # 4. Test Daily Shutdown override during prime hours
+    res_shutdown = compute_schedule_state(
+        prime_hours_only=True,
+        shutdown_active=True,
+        shutdown_until_ts=dt_working.timestamp() + 3600.0,
+        ts=dt_working.timestamp(),
+    )
+    assert res_shutdown["status"] == "RESTING"
+    assert res_shutdown["is_working"] is False
+    assert res_shutdown["reason"] == "Daily Shutdown / Risk Cooldown Active"
+    assert res_shutdown["time_left_to_start_sec"] == 3600.0
+
+    # 5. Test Session PnL Calculation
+    session_start_ts = datetime.datetime(2026, 11, 4, 13, 30, 0, tzinfo=IST_TZ).timestamp()
+    sample_trades = [
+        {"order_id": "old", "status": "SETTLED", "pnl_usd": 10.0, "exec_ts": session_start_ts - 500},
+        {"order_id": "t1", "status": "SETTLED", "pnl_usd": 0.42, "exec_ts": session_start_ts + 100},
+        {"order_id": "t2", "status": "SETTLED", "pnl_usd": -0.20, "exec_ts": session_start_ts + 200},
+    ]
+    res_pnl = compute_schedule_state(
+        prime_hours_only=True,
+        trades=sample_trades,
+        ts=dt_working.timestamp(),
+    )
+    assert res_pnl["session_trades_count"] == 2
+    assert res_pnl["session_wins"] == 1
+    assert res_pnl["session_losses"] == 1
+    assert res_pnl["session_pnl_usd"] == 0.22
