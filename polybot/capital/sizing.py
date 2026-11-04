@@ -50,23 +50,41 @@ class DynamicTradeBudgetCalculator:
         self,
         min_order_usd: float = 1.0,
         taker_fee_rate: float = 0.001,
+        sizing_mode: str = "canonical",
     ):
         self.min_order_usd = min_order_usd
         self.taker_fee_rate = taker_fee_rate
+        self.sizing_mode = sizing_mode
 
     def calculate_initial_budget(self, active_capital_usd: float) -> int:
-        """Derives whole-dollar Initial order budget = round_half_up(Active / 11)."""
+        """Derives whole-dollar Initial order budget."""
         if active_capital_usd <= 0:
             return 0
-        raw = active_capital_usd / 11.0
-        return round_half_up_to_whole_dollar(raw)
+        if self.sizing_mode == "tiered":
+            if active_capital_usd < 15.0:
+                return 2  # Boosted early compounding on $11 balance
+            elif active_capital_usd < 25.0:
+                return 3
+            elif active_capital_usd < 35.0:
+                return 4
+            elif active_capital_usd < 50.0:
+                return 5
+            else:
+                return min(8, max(1, int(round(active_capital_usd * 0.15))))
+        else:
+            raw = active_capital_usd / 11.0
+            return round_half_up_to_whole_dollar(raw)
 
     def calculate_reversal_budget(self, active_capital_usd: float) -> int:
-        """Derives whole-dollar Reversal order budget = round_half_up((Active * 10) / 11)."""
+        """Derives whole-dollar Reversal order budget."""
         if active_capital_usd <= 0:
             return 0
-        raw = (active_capital_usd * 10.0) / 11.0
-        return round_half_up_to_whole_dollar(raw)
+        if self.sizing_mode == "tiered":
+            init_b = self.calculate_initial_budget(active_capital_usd)
+            return max(1, int(round(init_b * 1.5)))
+        else:
+            raw = (active_capital_usd * 10.0) / 11.0
+            return round_half_up_to_whole_dollar(raw)
 
     def get_budgets(self, active_capital_usd: float) -> Tuple[int, int]:
         """Returns (initial_budget, reversal_budget) in whole dollars."""

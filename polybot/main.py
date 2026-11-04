@@ -83,7 +83,8 @@ async def run_paper(config: PolybotConfig, demo: bool = False, reset: bool = Fal
     capital_mgr = CapitalManager(db_path=config.recorder.data_dir / "paper_ledger.db", starting_equity_usd=11.0)
     budget_calc = DynamicTradeBudgetCalculator(
         min_order_usd=1.0,
-        taker_fee_rate=config.strategy.taker_fee_rate
+        taker_fee_rate=config.strategy.taker_fee_rate,
+        sizing_mode=os.getenv("SIZING_MODE", "tiered"),
     )
 
     ledger = TradeLedger(config.recorder.data_dir / "paper_ledger.db")

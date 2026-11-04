@@ -355,6 +355,7 @@ class ReversalStrategy(BaseStrategy):
         self.initial_order_placed: bool = False
         self.initial_side: Optional[str] = None
         self.initial_order_id: Optional[str] = None
+        self.initial_order_ts: float = 0.0
         self.reversal_order_placed: bool = False
         self.dynamic_initial_usd: Optional[float] = None
         self.dynamic_reversal_usd: Optional[float] = None
@@ -372,6 +373,7 @@ class ReversalStrategy(BaseStrategy):
         self.initial_order_placed = False
         self.initial_side = None
         self.initial_order_id = None
+        self.initial_order_ts = 0.0
         self.reversal_order_placed = False
         self.rejection_cooldown_until = {}
         self.last_tick_ts = 0.0
@@ -410,6 +412,16 @@ class ReversalStrategy(BaseStrategy):
         self.last_tick_ts = timestamp_sec
         elapsed = timestamp_sec - self.window_start
         receipt_ts = data_receipt_ts or timestamp_sec
+
+        # 0. Prime Hours enforcement (Option B: 13:30 to 01:00 IST)
+        # Apply only to real-world timestamps (> 1_000_000_000, post-2001)
+        if getattr(self.config, "prime_hours_only", False) and timestamp_sec > 1_000_000_000:
+            import datetime
+            dt_ist = datetime.datetime.fromtimestamp(timestamp_sec, tz=datetime.timezone(datetime.timedelta(hours=5, minutes=30)))
+            h, m = dt_ist.hour, dt_ist.minute
+            is_prime = (h > 13) or (h == 13 and m >= 30) or (h == 0) or (h == 1 and m == 0 and dt_ist.second == 0)
+            if not is_prime:
+                return None
 
         # Rejection cooldown check to eliminate millisecond retry spam loops
         if not self.initial_order_placed and self.rejection_cooldown_until.get("INITIAL", 0.0) > timestamp_sec:
@@ -472,12 +484,22 @@ class ReversalStrategy(BaseStrategy):
                         continue
 
                     avg_price, shares, spent = fill
+                    # Hard Price Ceiling check (Option B safeguard: never buy above price_ceiling)
+                    price_ceil = getattr(self.config, "price_ceiling", 0.910)
+                    if avg_price > price_ceil:
+                        log.info(
+                            "ReversalStrategy %s avg_price %.3f exceeds price ceiling %.3f (stake=$%.2f)",
+                            side, avg_price, price_ceil, initial_stake
+                        )
+                        continue
+
                     fee = spent * self.config.taker_fee_rate
                     order_id = f"init-{int(timestamp_sec * 1000)}"
 
                     self.initial_order_placed = True
                     self.initial_side = side
                     self.initial_order_id = order_id
+                    self.initial_order_ts = timestamp_sec
 
                     log.info(
                         "REVERSAL_STRAT INITIAL BUY %s @ %.3f x %.2f shares ($%.2f) at elapsed=%.1fs (prob=%.3f)",
@@ -504,11 +526,31 @@ class ReversalStrategy(BaseStrategy):
 
         # 4. Check REVERSAL Entry (after initial order has been placed, and reversal not yet placed)
         elif self.initial_order_placed and not self.reversal_order_placed and self.initial_side is not None:
+            enable_rev = getattr(self.config, "enable_reversals", True)
+            if not enable_rev:
+                # Option B: Pure Early Exit - Reversals disabled
+                return None
+
+            # Reversal confirmation guardrails:
+            # 1. Debounce (if configured)
+            debounce_sec = getattr(self.config, "reversal_debounce_sec", 0.0)
+            if debounce_sec > 0 and (timestamp_sec - self.initial_order_ts) < debounce_sec:
+                return None
+
             opp_side = "Down" if self.initial_side == "Up" else "Up"
             opp_book = book_down if self.initial_side == "Up" else book_up
             opp_prob = down_prob if self.initial_side == "Up" else up_prob
             initial_book = book_up if self.initial_side == "Up" else book_down
             init_current_prob = up_prob if self.initial_side == "Up" else down_prob
+
+            # 2. Collapse check: initial side must have collapsed <= 0.20
+            if init_current_prob is not None and init_current_prob > 0.20:
+                return None
+
+            # 3. Synthetic book sum: reject wide spread / crossed quotes
+            if opp_prob is not None and init_current_prob is not None:
+                if (opp_prob + init_current_prob) > 1.05:
+                    return None
 
             if opp_prob is not None and opp_book is not None:
                 # Range check: 85% <= opp_prob <= 90% (inclusive)
@@ -525,6 +567,12 @@ class ReversalStrategy(BaseStrategy):
                         return None
 
                     avg_price, shares, spent = fill
+                    # 4. Price ceiling check on reversal
+                    price_ceil = getattr(self.config, "price_ceiling", 0.910)
+                    if avg_price > price_ceil:
+                        log.info("ReversalStrategy %s avg_price %.3f exceeds price ceiling %.3f", opp_side, avg_price, price_ceil)
+                        return None
+
                     fee = spent * self.config.taker_fee_rate
                     self.reversal_order_placed = True
 
