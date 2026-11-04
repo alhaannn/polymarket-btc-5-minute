@@ -75,13 +75,14 @@ class DynamicTradeBudgetCalculator:
             raw = active_capital_usd / 11.0
             return round_half_up_to_whole_dollar(raw)
 
-    def calculate_reversal_budget(self, active_capital_usd: float) -> int:
+    def calculate_reversal_budget(self, active_capital_usd: float, max_balance_pct: float = 0.80) -> int:
         """Derives whole-dollar Reversal order budget."""
         if active_capital_usd <= 0:
             return 0
         if self.sizing_mode == "tiered":
             init_b = self.calculate_initial_budget(active_capital_usd)
-            return max(1, int(round(init_b * 1.5)))
+            cap = int(math.floor(active_capital_usd * max_balance_pct))
+            return max(int(round(init_b * 1.5)), min(25, cap))
         else:
             raw = (active_capital_usd * 10.0) / 11.0
             return round_half_up_to_whole_dollar(raw)

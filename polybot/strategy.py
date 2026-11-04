@@ -359,6 +359,8 @@ class ReversalStrategy(BaseStrategy):
         self.initial_shares: float = 0.0
         self.initial_cost_usd: float = 0.0
         self.early_exit_placed: bool = False
+        self.early_exit_loss: float = 0.0
+        self.early_exit_received: float = 0.0
         self.reversal_order_placed: bool = False
         self.dynamic_initial_usd: Optional[float] = None
         self.dynamic_reversal_usd: Optional[float] = None
@@ -380,6 +382,8 @@ class ReversalStrategy(BaseStrategy):
         self.initial_shares = 0.0
         self.initial_cost_usd = 0.0
         self.early_exit_placed = False
+        self.early_exit_loss = 0.0
+        self.early_exit_received = 0.0
         self.reversal_order_placed = False
         self.rejection_cooldown_until = {}
         self.last_tick_ts = 0.0
@@ -410,6 +414,8 @@ class ReversalStrategy(BaseStrategy):
             self.reversal_order_placed = False
         elif signal_type == "EARLY_EXIT":
             self.early_exit_placed = False
+            self.early_exit_loss = 0.0
+            self.early_exit_received = 0.0
 
     def on_tick(
         self,
@@ -444,8 +450,13 @@ class ReversalStrategy(BaseStrategy):
         if elapsed < self.config.reversal_window_start_sec:
             return None
 
-        # Closed phase: at or after 300 seconds -> NO trades
-        if elapsed >= self.config.reversal_window_end_sec:
+        # Closed phase for initial snipe: initial order MUST enter within snipe window (default <= 210s)
+        snipe_cutoff = getattr(self.config, "initial_snipe_end_sec", getattr(self.config, "reversal_window_end_sec", 210.0))
+        if not self.initial_order_placed and elapsed >= snipe_cutoff:
+            return None
+
+        # Closed phase: at or after 300 seconds -> window concluded, NO trades
+        if elapsed >= 300.0:
             return None
 
         # 2. Extract books for Up and Down (supporting 'Up'/'Down' keys or side property)
@@ -496,7 +507,7 @@ class ReversalStrategy(BaseStrategy):
                     avg_price, shares, spent = fill
                     # Hard Price Ceiling check (Option B safeguard: never buy above price_ceiling)
                     price_ceil = getattr(self.config, "price_ceiling", 0.910)
-                    if avg_price > price_ceil:
+                    if avg_price > price_ceil + 1e-5:
                         log.info(
                             "ReversalStrategy %s avg_price %.3f exceeds price ceiling %.3f (stake=$%.2f)",
                             side, avg_price, price_ceil, initial_stake
@@ -537,131 +548,153 @@ class ReversalStrategy(BaseStrategy):
                     )
 
         # 4. Check EARLY EXIT or REVERSAL Entry
-        elif self.initial_order_placed and not self.reversal_order_placed and not getattr(self, "early_exit_placed", False) and self.initial_side is not None:
-            if self.rejection_cooldown_until.get("EARLY_EXIT", 0.0) > timestamp_sec:
-                return None
-
+        elif self.initial_order_placed and self.initial_side is not None:
             opp_side = "Down" if self.initial_side == "Up" else "Up"
             opp_book = book_down if self.initial_side == "Up" else book_up
             opp_prob = down_prob if self.initial_side == "Up" else up_prob
             initial_book = book_up if self.initial_side == "Up" else book_down
             init_current_prob = up_prob if self.initial_side == "Up" else down_prob
 
+            early_exit_enabled = getattr(self.config, "early_exit", True)
             enable_rev = getattr(self.config, "enable_reversals", True)
 
-            # Check EARLY EXIT (Option B: cut losing trade at 30% or when opposite side rises to reversal zone)
-            if getattr(self.config, "early_exit", False) and not enable_rev:
-                exit_p = getattr(self.config, "exit_p", 0.30)
-                init_bid = initial_book.best_bid() if initial_book else None
-                should_early_exit = False
-                if init_bid is not None and init_bid <= exit_p:
-                    should_early_exit = True
-                elif opp_prob is not None and opp_prob >= self.config.reversal_prob_min:
-                    should_early_exit = True
+            # Phase A: Check EARLY EXIT (Shield 2: Order Book Capital Salvage)
+            if early_exit_enabled and not getattr(self, "early_exit_placed", False):
+                if self.rejection_cooldown_until.get("EARLY_EXIT", 0.0) <= timestamp_sec:
+                    exit_p = getattr(self.config, "exit_p", 0.35)
+                    init_bid = initial_book.best_bid() if initial_book else None
+                    should_early_exit = False
+                    if init_bid is not None and init_bid <= exit_p:
+                        should_early_exit = True
+                    elif opp_prob is not None and opp_prob >= self.config.reversal_prob_min:
+                        should_early_exit = True
 
-                if should_early_exit and initial_book and getattr(self, "initial_shares", 0.0) > 0:
-                    sell_fill = initial_book.simulate_sell(self.initial_shares)
-                    if sell_fill is not None:
-                        avg_sell_price, shares_sold, received = sell_fill
-                        fee = received * self.config.taker_fee_rate
-                        self.early_exit_placed = True
+                    if should_early_exit and initial_book and getattr(self, "initial_shares", 0.0) > 0:
+                        sell_fill = initial_book.simulate_sell(self.initial_shares)
+                        if sell_fill is not None:
+                            avg_sell_price, shares_sold, received = sell_fill
+                            fee = received * self.config.taker_fee_rate
+                            self.early_exit_placed = True
+                            self.early_exit_received = received
+                            self.early_exit_loss = max(0.0, self.initial_cost_usd - received + fee)
+                            log.info(
+                                "REVERSAL_STRAT EARLY EXIT SELL %s @ %.3f x %.2f shares ($%.2f received, loss=$%.2f) at elapsed=%.1fs (init_bid=%.3f, opp_prob=%.3f)",
+                                self.initial_side, avg_sell_price, shares_sold, received,
+                                self.early_exit_loss, elapsed, init_bid or 0.0, opp_prob or 0.0
+                            )
+                            return TradeSignal(
+                                slug=f"btc-updown-5m-{self.window_start}",
+                                side=self.initial_side,
+                                action="SELL",
+                                order_type="taker",
+                                price=avg_sell_price,
+                                shares=shares_sold,
+                                cost_usd=received,
+                                fee_usd=fee,
+                                elapsed_sec=elapsed,
+                                model_prob=init_bid or 0.0,
+                                expected_edge=0.0,
+                                timestamp_sec=timestamp_sec,
+                                signal_type="EARLY_EXIT",
+                                linked_order_id=self.initial_order_id,
+                                trigger_prob=init_bid or 0.0,
+                                counterpart_prob=opp_prob or 0.0,
+                                data_receipt_ts=receipt_ts,
+                            )
+
+            # Phase B: Check REVERSAL Entry (Shield 3: Precision Recovery Flip & Shield 4 Guardrails)
+            if enable_rev and not getattr(self, "reversal_order_placed", False):
+                # If early exit is enabled, reversal only triggers AFTER early exit has executed!
+                if early_exit_enabled and not getattr(self, "early_exit_placed", False):
+                    return None
+
+                if self.rejection_cooldown_until.get("REVERSAL", 0.0) > timestamp_sec:
+                    return None
+
+                # Shield 4 Guardrail A: Hard Timing Cutoff (no entries after recovery_max_time_sec, e.g. 255.0s)
+                recovery_max_time = getattr(self.config, "recovery_max_time_sec", 255.0)
+                if elapsed > recovery_max_time:
+                    log.debug("Reversal rejected: elapsed %.1fs exceeds recovery max time %.1fs", elapsed, recovery_max_time)
+                    return None
+
+                # Reversal debounce
+                debounce_sec = getattr(self.config, "reversal_debounce_sec", 0.0)
+                if debounce_sec > 0 and (timestamp_sec - self.initial_order_ts) < debounce_sec:
+                    return None
+
+                # Collapse check: initial side must have collapsed <= 0.25 (or early exit already confirmed it)
+                if not getattr(self, "early_exit_placed", False):
+                    if init_current_prob is not None and init_current_prob > 0.25:
+                        return None
+
+                # Synthetic book sum: reject wide spread / crossed quotes
+                if opp_prob is not None and init_current_prob is not None:
+                    if (opp_prob + init_current_prob) > 1.05:
+                        return None
+
+                if opp_prob is not None and opp_book is not None:
+                    # Shield 4 Guardrail B: Range check (e.g. 88% <= opp_prob <= 92%)
+                    if self.config.reversal_prob_min <= opp_prob <= self.config.reversal_prob_max:
+                        # Precision Sizing Formula (Shield 3)
+                        flip_mode = getattr(self.config, "recovery_flip_mode", "precision")
+                        target_profit = getattr(self, "early_exit_loss", 0.0)
+                        budget_limit = self.dynamic_reversal_usd if self.dynamic_reversal_usd is not None else self.config.reversal_stake_usd
+
+                        if flip_mode == "precision" and target_profit > 0.10:
+                            opp_ask = opp_book.best_ask()
+                            if opp_ask and 0 < opp_ask < 1.0:
+                                est_return_rate = (1.0 / opp_ask) - 1.0 - self.config.taker_fee_rate
+                                needed_stake = target_profit / max(est_return_rate, 0.05)
+                            else:
+                                needed_stake = target_profit / 0.12
+                            reversal_stake = min(needed_stake, budget_limit)
+                            reversal_stake = max(1.0, round(reversal_stake, 2))
+                        else:
+                            reversal_stake = budget_limit
+
+                        init_bids = initial_book.get_sorted_bids() if initial_book else None
+                        fill = opp_book.simulate_buy(reversal_stake, opposing_bids=init_bids)
+                        if fill is None:
+                            log.info(
+                                "ReversalStrategy %s ask %.3f in reversal range [%.2f, %.2f] but depth thin for $%.2f",
+                                opp_side, opp_prob, self.config.reversal_prob_min, self.config.reversal_prob_max,
+                                reversal_stake
+                            )
+                            return None
+
+                        avg_price, shares, spent = fill
+                        # Price ceiling check on reversal
+                        price_ceil = getattr(self.config, "price_ceiling", 0.910)
+                        if avg_price > price_ceil + 1e-5:
+                            log.info("ReversalStrategy %s avg_price %.3f exceeds price ceiling %.3f", opp_side, avg_price, price_ceil)
+                            return None
+
+                        fee = spent * self.config.taker_fee_rate
+                        self.reversal_order_placed = True
+
                         log.info(
-                            "REVERSAL_STRAT EARLY EXIT SELL %s @ %.3f x %.2f shares ($%.2f received, loss=$%.2f) at elapsed=%.1fs (init_bid=%.3f, opp_prob=%.3f)",
-                            self.initial_side, avg_sell_price, shares_sold, received,
-                            (self.initial_cost_usd - received), elapsed, init_bid or 0.0, opp_prob or 0.0
+                            "REVERSAL_STRAT REVERSAL BUY %s @ %.3f x %.2f shares ($%.2f) at elapsed=%.1fs (opp_prob=%.3f, target_pnl=$%.2f, linked=%s)",
+                            opp_side, avg_price, shares, spent, elapsed, opp_prob, target_profit, self.initial_order_id
                         )
                         return TradeSignal(
                             slug=f"btc-updown-5m-{self.window_start}",
-                            side=self.initial_side,
-                            action="SELL",
+                            side=opp_side,
+                            action="BUY",
                             order_type="taker",
-                            price=avg_sell_price,
-                            shares=shares_sold,
-                            cost_usd=received,
+                            price=avg_price,
+                            shares=shares,
+                            cost_usd=spent,
                             fee_usd=fee,
                             elapsed_sec=elapsed,
-                            model_prob=init_bid or 0.0,
+                            model_prob=opp_prob,
                             expected_edge=0.0,
                             timestamp_sec=timestamp_sec,
-                            signal_type="EARLY_EXIT",
+                            signal_type="REVERSAL",
                             linked_order_id=self.initial_order_id,
-                            trigger_prob=init_bid or 0.0,
-                            counterpart_prob=opp_prob or 0.0,
+                            trigger_prob=opp_prob,
+                            counterpart_prob=init_current_prob or 0.0,
                             data_receipt_ts=receipt_ts,
                         )
-
-            if not enable_rev:
-                # Option B: Pure Early Exit - Reversals disabled
-                return None
-
-            # Reversal confirmation guardrails:
-            # 1. Debounce (if configured)
-            debounce_sec = getattr(self.config, "reversal_debounce_sec", 0.0)
-            if debounce_sec > 0 and (timestamp_sec - self.initial_order_ts) < debounce_sec:
-                return None
-
-            opp_side = "Down" if self.initial_side == "Up" else "Up"
-            opp_book = book_down if self.initial_side == "Up" else book_up
-            opp_prob = down_prob if self.initial_side == "Up" else up_prob
-            initial_book = book_up if self.initial_side == "Up" else book_down
-            init_current_prob = up_prob if self.initial_side == "Up" else down_prob
-
-            # 2. Collapse check: initial side must have collapsed <= 0.20
-            if init_current_prob is not None and init_current_prob > 0.20:
-                return None
-
-            # 3. Synthetic book sum: reject wide spread / crossed quotes
-            if opp_prob is not None and init_current_prob is not None:
-                if (opp_prob + init_current_prob) > 1.05:
-                    return None
-
-            if opp_prob is not None and opp_book is not None:
-                # Range check: 85% <= opp_prob <= 90% (inclusive)
-                if self.config.reversal_prob_min <= opp_prob <= self.config.reversal_prob_max:
-                    reversal_stake = self.dynamic_reversal_usd if self.dynamic_reversal_usd is not None else self.config.reversal_stake_usd
-                    init_bids = initial_book.get_sorted_bids() if initial_book else None
-                    fill = opp_book.simulate_buy(reversal_stake, opposing_bids=init_bids)
-                    if fill is None:
-                        log.info(
-                            "ReversalStrategy %s ask %.3f in reversal range [%.2f, %.2f] but depth thin for $%.2f",
-                            opp_side, opp_prob, self.config.reversal_prob_min, self.config.reversal_prob_max,
-                            reversal_stake
-                        )
-                        return None
-
-                    avg_price, shares, spent = fill
-                    # 4. Price ceiling check on reversal
-                    price_ceil = getattr(self.config, "price_ceiling", 0.910)
-                    if avg_price > price_ceil:
-                        log.info("ReversalStrategy %s avg_price %.3f exceeds price ceiling %.3f", opp_side, avg_price, price_ceil)
-                        return None
-
-                    fee = spent * self.config.taker_fee_rate
-                    self.reversal_order_placed = True
-
-                    log.info(
-                        "REVERSAL_STRAT REVERSAL BUY %s @ %.3f x %.2f shares ($%.2f) at elapsed=%.1fs (opp_prob=%.3f, linked=%s)",
-                        opp_side, avg_price, shares, spent, elapsed, opp_prob, self.initial_order_id
-                    )
-                    return TradeSignal(
-                        slug=f"btc-updown-5m-{self.window_start}",
-                        side=opp_side,
-                        action="BUY",
-                        order_type="taker",
-                        price=avg_price,
-                        shares=shares,
-                        cost_usd=spent,
-                        fee_usd=fee,
-                        elapsed_sec=elapsed,
-                        model_prob=opp_prob,
-                        expected_edge=0.0,
-                        timestamp_sec=timestamp_sec,
-                        signal_type="REVERSAL",
-                        linked_order_id=self.initial_order_id,
-                        trigger_prob=opp_prob,
-                        counterpart_prob=init_current_prob or 0.0,
-                        data_receipt_ts=receipt_ts,
-                    )
 
         return None
 

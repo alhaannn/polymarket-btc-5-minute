@@ -94,7 +94,7 @@ class StrategyConfig:
     adverse_drift_max_pct: float = 0.50
     vol_spike_ratio_max: float = 2.5
     spread_max: float = 0.05
-    early_exit: bool = True
+    early_exit: bool = False
     exit_p: float = 0.30
     latency_ms: int = 400
     order_style: str = "taker"  # "taker" or "maker"
@@ -109,18 +109,25 @@ class StrategyConfig:
     initial_stake_usd: float = 1.0
     reversal_stake_usd: float = 10.0
     initial_prob_min: float = 0.89
-    initial_prob_max: float = 0.92
+    initial_prob_max: float = 0.91
     reversal_prob_min: float = 0.85
     reversal_prob_max: float = 0.90
     reversal_window_start_sec: float = 180.0
+    initial_snipe_end_sec: float = 210.0
     reversal_window_end_sec: float = 300.0
     max_initial_orders_per_window: int = 1
     max_reversal_orders_per_initial: int = 1
     reporting_timezone: str = "local"
-    prime_hours_only: bool = False
+    prime_hours_only: bool = True
     enable_reversals: bool = True
-    price_ceiling: float = 0.985
+    price_ceiling: float = 0.910
     reversal_debounce_sec: float = 0.0
+    early_exit: bool = False
+    exit_p: float = 0.35
+    recovery_flip_mode: str = "precision"
+    recovery_max_time_sec: float = 255.0
+    recovery_max_balance_pct: float = 0.80
+    recovery_stop_loss_p: float = 0.50
 
     @classmethod
     def from_env(cls) -> StrategyConfig:
@@ -140,7 +147,7 @@ class StrategyConfig:
             vol_spike_ratio_max=_get_env_val("VOL_SPIKE_RATIO_MAX", 2.5, float),
             spread_max=_get_env_val("SPREAD_MAX", 0.05, float),
             early_exit=_get_env_val("EARLY_EXIT", True, bool),
-            exit_p=_get_env_val("EXIT_P", 0.30, float),
+            exit_p=_get_env_val("EXIT_P", 0.35, float),
             latency_ms=_get_env_val("LATENCY_MS", 400, int),
             order_style=os.getenv("ORDER_STYLE", "taker"),
             maker_timeout_sec=_get_env_val("MAKER_TIMEOUT_SEC", 10.0, float),
@@ -149,19 +156,24 @@ class StrategyConfig:
             maker_fee_rate=_get_env_val("MAKER_FEE_RATE", 0.000, float),
             initial_stake_usd=_get_env_val("INITIAL_STAKE_USD", 1.0, float),
             reversal_stake_usd=_get_env_val("REVERSAL_STAKE_USD", 10.0, float),
-            initial_prob_min=_get_env_val("INITIAL_PROB_MIN", 0.85, float),
-            initial_prob_max=_get_env_val("INITIAL_PROB_MAX", 0.90, float),
-            reversal_prob_min=_get_env_val("REVERSAL_PROB_MIN", 0.85, float),
-            reversal_prob_max=_get_env_val("REVERSAL_PROB_MAX", 0.90, float),
+            initial_prob_min=_get_env_val("INITIAL_PROB_MIN", 0.89, float),
+            initial_prob_max=_get_env_val("INITIAL_PROB_MAX", 0.91, float),
+            reversal_prob_min=_get_env_val("REVERSAL_PROB_MIN", 0.88, float),
+            reversal_prob_max=_get_env_val("REVERSAL_PROB_MAX", 0.92, float),
             reversal_window_start_sec=_get_env_val("REVERSAL_WINDOW_START_SEC", 180.0, float),
+            initial_snipe_end_sec=_get_env_val("INITIAL_SNIPE_END_SEC", 210.0, float),
             reversal_window_end_sec=_get_env_val("REVERSAL_WINDOW_END_SEC", 300.0, float),
             max_initial_orders_per_window=_get_env_val("MAX_INITIAL_ORDERS_PER_WINDOW", 1, int),
             max_reversal_orders_per_initial=_get_env_val("MAX_REVERSAL_ORDERS_PER_INITIAL", 1, int),
             reporting_timezone=os.getenv("REPORTING_TIMEZONE", "local"),
             prime_hours_only=_get_env_val("PRIME_HOURS_ONLY", True, bool),
-            enable_reversals=_get_env_val("ENABLE_REVERSALS", False, bool),
-            price_ceiling=_get_env_val("PRICE_CEILING", 0.900, float),
+            enable_reversals=_get_env_val("ENABLE_REVERSALS", True, bool),
+            price_ceiling=_get_env_val("PRICE_CEILING", 0.910, float),
             reversal_debounce_sec=_get_env_val("REVERSAL_DEBOUNCE_SEC", 0.0, float),
+            recovery_flip_mode=os.getenv("RECOVERY_FLIP_MODE", "precision"),
+            recovery_max_time_sec=_get_env_val("RECOVERY_MAX_TIME_SEC", 255.0, float),
+            recovery_max_balance_pct=_get_env_val("RECOVERY_MAX_BALANCE_PCT", 0.80, float),
+            recovery_stop_loss_p=_get_env_val("RECOVERY_STOP_LOSS_P", 0.50, float),
         )
 
 
