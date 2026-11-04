@@ -318,9 +318,40 @@ async def run_paper(config: PolybotConfig, demo: bool = False, reset: bool = Fal
             new_fills = engine.process_pending_orders(now, clob.side_books)
             for f in new_fills:
                 dash_state.add_log(
-                    "BUY",
+                    "BUY" if f.action == "BUY" else "SELL",
                     f"Paper fill: {f.signal_type} {f.side} {f.shares:.2f}sh @ ${f.price:.3f} (${f.cost_usd:.2f})"
                 )
+                if f.action == "SELL":
+                    closed_pos = next((p for p in engine.settled_positions if p.order_id == f.linked_order_id or p.slug == f.slug), None)
+                    if closed_pos:
+                        risk.record_trade_settled(closed_pos.realized_pnl_usd, closed_pos.total_cost_usd, current_window_idx)
+                        settle_id = f"settle-early-{f.slug}-{closed_pos.order_id}"
+                        try:
+                            capital_mgr.process_settlement(
+                                settlement_id=settle_id,
+                                net_pnl_usd=closed_pos.realized_pnl_usd,
+                                fee_usd=closed_pos.total_fees_usd,
+                                trading_day=ist_today_str(),
+                                signal_type=closed_pos.signal_type,
+                            )
+                            log.info("[EARLY_EXIT_SETTLED] %s net_pnl=$%+.2f payout=$%.2f",
+                                     settle_id, closed_pos.realized_pnl_usd, closed_pos.payout_usd)
+                        except Exception as e:
+                            log.error("Failed to process early exit settlement for %s: %s", settle_id, e)
+
+                        open_exp = engine.get_open_exposure()
+                        init_b, rev_b = capital_mgr.get_trade_budgets(ist_today_str())
+                        dash_cap = capital_mgr.state.to_dict()
+                        dash_cap.update({
+                            "current_initial_budget": init_b,
+                            "current_reversal_budget": rev_b,
+                            "open_exposure": round(open_exp, 2),
+                            "spendable_active_funds": max(0.0, round(capital_mgr.state.active_capital - open_exp, 2)),
+                            "active_funds_reserved": round(open_exp, 2),
+                            "protected_funds": capital_mgr.state.protected_capital,
+                            "unsettled_funds": round(open_exp, 2),
+                        })
+                        dash_state.update_capital(dash_cap)
 
             # Update dashboard market clock & state
             dash_state.update_clock(
@@ -413,6 +444,32 @@ async def run_paper(config: PolybotConfig, demo: bool = False, reset: bool = Fal
 
                 sig = strat.on_tick(cur_price, now, clob.side_books, health)
                 if sig:
+                    if sig.action == "SELL":
+                        order = Order(
+                            order_id=f"paper-{int(now * 1000)}",
+                            slug=sig.slug,
+                            side=sig.side,
+                            action=sig.action,
+                            order_type=sig.order_type,
+                            price=sig.price,
+                            usd_amount=sig.cost_usd,
+                            shares=sig.shares,
+                            created_at_ts=now,
+                            latency_ms=config.strategy.latency_ms,
+                            signal_type=sig.signal_type,
+                            linked_order_id=sig.linked_order_id,
+                            trigger_prob=sig.trigger_prob,
+                            counterpart_prob=sig.counterpart_prob,
+                            data_receipt_ts=sig.data_receipt_ts,
+                        )
+                        engine.submit_order(order)
+                        open_trades_to_settle = [it for it in open_trades_to_settle if it["slug"] != sig.slug]
+                        dash_state.add_log(
+                            "EARLY_EXIT",
+                            f"Early exit sell placed: {order.order_id} ({sig.side} {sig.shares:.2f} shs @ ${sig.price:.3f})"
+                        )
+                        continue
+
                     stake_usd = sig.cost_usd
                     risk.sync_open_exposure(engine.get_open_exposure())
 

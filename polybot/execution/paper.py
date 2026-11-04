@@ -335,6 +335,16 @@ class PaperExecutionEngine(ExecutionEngine):
                 pos.total_fees_usd += fill.fee_usd
                 pos.realized_pnl_usd = pos.payout_usd - pos.total_cost_usd - pos.total_fees_usd
                 self.settled_positions.append(pos)
+                try:
+                    self.ledger.settle_order(
+                        order_id=pos.order_id,
+                        winner="EXIT_EARLY",
+                        payout_usd=pos.payout_usd,
+                        pnl_usd=pos.realized_pnl_usd,
+                        settled_at_ts=fill.filled_at_ts,
+                    )
+                except Exception as e:
+                    log.warning("Ledger settle_order for early exit failed: %s", e)
 
     def settle_window_all(self, slug: str, winner: str, settle_ts: float) -> List[Position]:
         """Settle all open position(s) for a window slug upon market resolution."""

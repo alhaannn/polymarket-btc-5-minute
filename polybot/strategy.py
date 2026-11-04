@@ -356,6 +356,9 @@ class ReversalStrategy(BaseStrategy):
         self.initial_side: Optional[str] = None
         self.initial_order_id: Optional[str] = None
         self.initial_order_ts: float = 0.0
+        self.initial_shares: float = 0.0
+        self.initial_cost_usd: float = 0.0
+        self.early_exit_placed: bool = False
         self.reversal_order_placed: bool = False
         self.dynamic_initial_usd: Optional[float] = None
         self.dynamic_reversal_usd: Optional[float] = None
@@ -374,6 +377,9 @@ class ReversalStrategy(BaseStrategy):
         self.initial_side = None
         self.initial_order_id = None
         self.initial_order_ts = 0.0
+        self.initial_shares = 0.0
+        self.initial_cost_usd = 0.0
+        self.early_exit_placed = False
         self.reversal_order_placed = False
         self.rejection_cooldown_until = {}
         self.last_tick_ts = 0.0
@@ -398,8 +404,12 @@ class ReversalStrategy(BaseStrategy):
             self.initial_order_placed = False
             self.initial_side = None
             self.initial_order_id = None
+            self.initial_shares = 0.0
+            self.initial_cost_usd = 0.0
         elif signal_type == "REVERSAL":
             self.reversal_order_placed = False
+        elif signal_type == "EARLY_EXIT":
+            self.early_exit_placed = False
 
     def on_tick(
         self,
@@ -500,6 +510,8 @@ class ReversalStrategy(BaseStrategy):
                     self.initial_side = side
                     self.initial_order_id = order_id
                     self.initial_order_ts = timestamp_sec
+                    self.initial_shares = shares
+                    self.initial_cost_usd = spent
 
                     log.info(
                         "REVERSAL_STRAT INITIAL BUY %s @ %.3f x %.2f shares ($%.2f) at elapsed=%.1fs (prob=%.3f)",
@@ -524,9 +536,60 @@ class ReversalStrategy(BaseStrategy):
                         data_receipt_ts=receipt_ts,
                     )
 
-        # 4. Check REVERSAL Entry (after initial order has been placed, and reversal not yet placed)
-        elif self.initial_order_placed and not self.reversal_order_placed and self.initial_side is not None:
+        # 4. Check EARLY EXIT or REVERSAL Entry
+        elif self.initial_order_placed and not self.reversal_order_placed and not getattr(self, "early_exit_placed", False) and self.initial_side is not None:
+            if self.rejection_cooldown_until.get("EARLY_EXIT", 0.0) > timestamp_sec:
+                return None
+
+            opp_side = "Down" if self.initial_side == "Up" else "Up"
+            opp_book = book_down if self.initial_side == "Up" else book_up
+            opp_prob = down_prob if self.initial_side == "Up" else up_prob
+            initial_book = book_up if self.initial_side == "Up" else book_down
+            init_current_prob = up_prob if self.initial_side == "Up" else down_prob
+
             enable_rev = getattr(self.config, "enable_reversals", True)
+
+            # Check EARLY EXIT (Option B: cut losing trade at 30% or when opposite side rises to reversal zone)
+            if getattr(self.config, "early_exit", False) and not enable_rev:
+                exit_p = getattr(self.config, "exit_p", 0.30)
+                init_bid = initial_book.best_bid() if initial_book else None
+                should_early_exit = False
+                if init_bid is not None and init_bid <= exit_p:
+                    should_early_exit = True
+                elif opp_prob is not None and opp_prob >= self.config.reversal_prob_min:
+                    should_early_exit = True
+
+                if should_early_exit and initial_book and getattr(self, "initial_shares", 0.0) > 0:
+                    sell_fill = initial_book.simulate_sell(self.initial_shares)
+                    if sell_fill is not None:
+                        avg_sell_price, shares_sold, received = sell_fill
+                        fee = received * self.config.taker_fee_rate
+                        self.early_exit_placed = True
+                        log.info(
+                            "REVERSAL_STRAT EARLY EXIT SELL %s @ %.3f x %.2f shares ($%.2f received, loss=$%.2f) at elapsed=%.1fs (init_bid=%.3f, opp_prob=%.3f)",
+                            self.initial_side, avg_sell_price, shares_sold, received,
+                            (self.initial_cost_usd - received), elapsed, init_bid or 0.0, opp_prob or 0.0
+                        )
+                        return TradeSignal(
+                            slug=f"btc-updown-5m-{self.window_start}",
+                            side=self.initial_side,
+                            action="SELL",
+                            order_type="taker",
+                            price=avg_sell_price,
+                            shares=shares_sold,
+                            cost_usd=received,
+                            fee_usd=fee,
+                            elapsed_sec=elapsed,
+                            model_prob=init_bid or 0.0,
+                            expected_edge=0.0,
+                            timestamp_sec=timestamp_sec,
+                            signal_type="EARLY_EXIT",
+                            linked_order_id=self.initial_order_id,
+                            trigger_prob=init_bid or 0.0,
+                            counterpart_prob=opp_prob or 0.0,
+                            data_receipt_ts=receipt_ts,
+                        )
+
             if not enable_rev:
                 # Option B: Pure Early Exit - Reversals disabled
                 return None

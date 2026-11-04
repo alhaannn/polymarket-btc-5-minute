@@ -94,8 +94,8 @@ class StrategyConfig:
     adverse_drift_max_pct: float = 0.50
     vol_spike_ratio_max: float = 2.5
     spread_max: float = 0.05
-    early_exit: bool = False
-    exit_p: float = 0.40
+    early_exit: bool = True
+    exit_p: float = 0.30
     latency_ms: int = 400
     order_style: str = "taker"  # "taker" or "maker"
     maker_timeout_sec: float = 10.0
@@ -139,8 +139,8 @@ class StrategyConfig:
             adverse_drift_max_pct=_get_env_val("ADVERSE_DRIFT_MAX_PCT", 0.50, float),
             vol_spike_ratio_max=_get_env_val("VOL_SPIKE_RATIO_MAX", 2.5, float),
             spread_max=_get_env_val("SPREAD_MAX", 0.05, float),
-            early_exit=_get_env_val("EARLY_EXIT", False, bool),
-            exit_p=_get_env_val("EXIT_P", 0.40, float),
+            early_exit=_get_env_val("EARLY_EXIT", True, bool),
+            exit_p=_get_env_val("EXIT_P", 0.30, float),
             latency_ms=_get_env_val("LATENCY_MS", 400, int),
             order_style=os.getenv("ORDER_STYLE", "taker"),
             maker_timeout_sec=_get_env_val("MAKER_TIMEOUT_SEC", 10.0, float),
