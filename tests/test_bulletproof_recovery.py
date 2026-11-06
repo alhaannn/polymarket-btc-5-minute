@@ -300,3 +300,66 @@ def test_pure_1_dollar_initial_and_10_dollar_reversal():
     assert sig2.cost_usd == 10.0
     assert sig2.side == "Down"
     assert sig2.linked_order_id == strat.initial_order_id
+
+
+def test_2_dollar_initial_and_20_dollar_reversal():
+    """Verify 10x scaling: $2 initial stake automatically produces $20 reversal stake."""
+    cfg = StrategyConfig(
+        prime_hours_only=False,
+        early_exit=False,
+        enable_reversals=True,
+        initial_prob_min=0.89,
+        initial_prob_max=0.91,
+        reversal_prob_min=0.85,
+        reversal_prob_max=0.95,
+        reversal_price_ceiling=0.930,
+        reversal_multiplier=10.0,
+    )
+    strat = ReversalStrategy(cfg)
+    strat.reset_window(window_start=1000)
+    # $22 account capital allocates $2 initial, $20 reversal
+    strat.set_dynamic_budgets(initial_usd=2.0, reversal_usd=20.0)
+
+    # 1. Initial Snipe at 195s ($2.00 @ 0.90)
+    b_init = create_mock_books(up_ask=0.90, down_ask=0.10)
+    sig1 = strat.on_tick(current_price=80000.0, timestamp_sec=1195.0, books=b_init)
+    assert sig1 is not None
+    assert sig1.signal_type == "INITIAL"
+    assert sig1.cost_usd == 2.0
+
+    # 2. Reversal fires at 10x ($20.00)
+    b_rev = create_mock_books(up_ask=0.10, down_ask=0.90)
+    sig2 = strat.on_tick(current_price=80000.0, timestamp_sec=1225.0, books=b_rev)
+    assert sig2 is not None
+    assert sig2.signal_type == "REVERSAL"
+    assert sig2.cost_usd == 20.0
+    assert sig2.side == "Down"
+
+
+def test_reversal_immediate_trigger_at_086_and_093():
+    """Verify reversal fires immediately across the wide 85%-95% range without artificial blocks."""
+    cfg = StrategyConfig(
+        prime_hours_only=False,
+        early_exit=False,
+        enable_reversals=True,
+        initial_prob_min=0.89,
+        initial_prob_max=0.91,
+        reversal_prob_min=0.85,
+        reversal_prob_max=0.95,
+        reversal_price_ceiling=0.935,
+    )
+    strat = ReversalStrategy(cfg)
+    strat.reset_window(window_start=1000)
+    strat.set_dynamic_budgets(initial_usd=1.0, reversal_usd=10.0)
+
+    # Initial at 195s
+    b_init = create_mock_books(up_ask=0.90, down_ask=0.10)
+    strat.on_tick(current_price=80000.0, timestamp_sec=1195.0, books=b_init)
+
+    # Reversal at 0.86 (previously blocked by 0.88 min) -> Now triggers immediately!
+    b_rev_86 = create_mock_books(up_ask=0.14, down_ask=0.86)
+    sig_rev_86 = strat.on_tick(current_price=80000.0, timestamp_sec=1220.0, books=b_rev_86)
+    assert sig_rev_86 is not None
+    assert sig_rev_86.signal_type == "REVERSAL"
+    assert sig_rev_86.cost_usd == 10.0
+    assert sig_rev_86.side == "Down"

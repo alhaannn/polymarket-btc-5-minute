@@ -611,8 +611,8 @@ class ReversalStrategy(BaseStrategy):
                 if self.rejection_cooldown_until.get("REVERSAL", 0.0) > timestamp_sec:
                     return None
 
-                # Shield 4 Guardrail A: Hard Timing Cutoff (no entries after recovery_max_time_sec, e.g. 255.0s)
-                recovery_max_time = getattr(self.config, "recovery_max_time_sec", 255.0)
+                # Shield 4 Guardrail A: Hard Timing Cutoff (no entries after recovery_max_time_sec, default 280.0s)
+                recovery_max_time = getattr(self.config, "recovery_max_time_sec", 280.0)
                 if elapsed > recovery_max_time:
                     log.debug("Reversal rejected: elapsed %.1fs exceeds recovery max time %.1fs", elapsed, recovery_max_time)
                     return None
@@ -622,21 +622,21 @@ class ReversalStrategy(BaseStrategy):
                 if debounce_sec > 0 and (timestamp_sec - self.initial_order_ts) < debounce_sec:
                     return None
 
-                # Collapse check: initial side must have collapsed <= 0.25 (or early exit already confirmed it)
+                # Collapse check: initial side must have collapsed <= 0.35 (or early exit already confirmed it)
                 if not getattr(self, "early_exit_placed", False):
-                    if init_current_prob is not None and init_current_prob > 0.25:
+                    if init_current_prob is not None and init_current_prob > 0.35:
                         return None
 
-                # Synthetic book sum: reject wide spread / crossed quotes
+                # Spread safety guard: only block if synthetic spread is severely distorted (> 1.15)
                 if opp_prob is not None and init_current_prob is not None:
-                    if (opp_prob + init_current_prob) > 1.05:
+                    if (opp_prob + init_current_prob) > 1.15:
                         return None
 
                 if opp_prob is not None and opp_book is not None:
-                    # Shield 4 Guardrail B: Range check (e.g. 88% <= opp_prob <= 92%)
+                    # Conviction check (e.g. 0.85 <= opp_prob <= 0.95)
                     if self.config.reversal_prob_min <= opp_prob <= self.config.reversal_prob_max:
-                        # Precision Sizing Formula (Shield 3)
-                        flip_mode = getattr(self.config, "recovery_flip_mode", "precision")
+                        # Precision Sizing Formula or Exact 10x Sizing ($1 -> $10, $2 -> $20)
+                        flip_mode = getattr(self.config, "recovery_flip_mode", "fixed")
                         target_profit = getattr(self, "early_exit_loss", 0.0)
                         budget_limit = self.dynamic_reversal_usd if self.dynamic_reversal_usd is not None else self.config.reversal_stake_usd
 
@@ -650,7 +650,11 @@ class ReversalStrategy(BaseStrategy):
                             reversal_stake = min(needed_stake, budget_limit)
                             reversal_stake = max(1.0, round(reversal_stake, 2))
                         else:
-                            reversal_stake = budget_limit
+                            # Exact 10x Sizing ($1 initial -> $10 reversal, $2 initial -> $20 reversal)
+                            reversal_mult = getattr(self.config, "reversal_multiplier", 10.0)
+                            target_stake = round(self.initial_cost_usd * reversal_mult, 2)
+                            reversal_stake = min(target_stake, budget_limit)
+                            reversal_stake = max(1.0, reversal_stake)
 
                         init_bids = initial_book.get_sorted_bids() if initial_book else None
                         fill = opp_book.simulate_buy(reversal_stake, opposing_bids=init_bids)

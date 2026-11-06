@@ -112,6 +112,7 @@ class StrategyConfig:
     initial_prob_max: float = 0.91
     reversal_prob_min: float = 0.85
     reversal_prob_max: float = 0.90
+    reversal_multiplier: float = 10.0
     reversal_window_start_sec: float = 180.0
     initial_snipe_end_sec: float = 210.0
     reversal_window_end_sec: float = 300.0
@@ -125,8 +126,8 @@ class StrategyConfig:
     reversal_debounce_sec: float = 0.0
     early_exit: bool = False
     exit_p: float = 0.35
-    recovery_flip_mode: str = "precision"
-    recovery_max_time_sec: float = 255.0
+    recovery_flip_mode: str = "fixed"
+    recovery_max_time_sec: float = 280.0
     recovery_max_balance_pct: float = 0.80
     recovery_stop_loss_p: float = 0.50
 
@@ -159,8 +160,9 @@ class StrategyConfig:
             reversal_stake_usd=_get_env_val("REVERSAL_STAKE_USD", 10.0, float),
             initial_prob_min=_get_env_val("INITIAL_PROB_MIN", 0.89, float),
             initial_prob_max=_get_env_val("INITIAL_PROB_MAX", 0.91, float),
-            reversal_prob_min=_get_env_val("REVERSAL_PROB_MIN", 0.88, float),
-            reversal_prob_max=_get_env_val("REVERSAL_PROB_MAX", 0.92, float),
+            reversal_prob_min=_get_env_val("REVERSAL_PROB_MIN", 0.85, float),
+            reversal_prob_max=_get_env_val("REVERSAL_PROB_MAX", 0.95, float),
+            reversal_multiplier=_get_env_val("REVERSAL_MULTIPLIER", 10.0, float),
             reversal_window_start_sec=_get_env_val("REVERSAL_WINDOW_START_SEC", 180.0, float),
             initial_snipe_end_sec=_get_env_val("INITIAL_SNIPE_END_SEC", 210.0, float),
             reversal_window_end_sec=_get_env_val("REVERSAL_WINDOW_END_SEC", 300.0, float),
@@ -172,8 +174,8 @@ class StrategyConfig:
             price_ceiling=_get_env_val("PRICE_CEILING", 0.910, float),
             reversal_price_ceiling=_get_env_val("REVERSAL_PRICE_CEILING", 0.930, float),
             reversal_debounce_sec=_get_env_val("REVERSAL_DEBOUNCE_SEC", 0.0, float),
-            recovery_flip_mode=os.getenv("RECOVERY_FLIP_MODE", "precision"),
-            recovery_max_time_sec=_get_env_val("RECOVERY_MAX_TIME_SEC", 255.0, float),
+            recovery_flip_mode=os.getenv("RECOVERY_FLIP_MODE", "fixed"),
+            recovery_max_time_sec=_get_env_val("RECOVERY_MAX_TIME_SEC", 280.0, float),
             recovery_max_balance_pct=_get_env_val("RECOVERY_MAX_BALANCE_PCT", 0.80, float),
             recovery_stop_loss_p=_get_env_val("RECOVERY_STOP_LOSS_P", 0.50, float),
         )
