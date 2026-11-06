@@ -10,6 +10,12 @@ from pathlib import Path
 from typing import Any, Optional
 
 try:
+    from dotenv import load_dotenv
+    load_dotenv(override=True)
+except ImportError:
+    pass
+
+try:
     import yaml
 except ImportError:
     yaml = None
