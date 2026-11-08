@@ -61,7 +61,13 @@ async def run_recorder(config: PolybotConfig) -> None:
         await recorder.stop()
         log.info("Recorder shut down complete.")
 
-async def run_paper(config: PolybotConfig, demo: bool = False, reset: bool = False, paused: bool = False) -> None:
+async def run_paper(
+    config: PolybotConfig,
+    demo: bool = False,
+    reset: bool = False,
+    paused: bool = False,
+    mode: Optional[str] = None,
+) -> None:
     import math
     from polybot.tz import ist_today_str
     from polybot.dashboard.server import DashboardServer
@@ -81,7 +87,7 @@ async def run_paper(config: PolybotConfig, demo: bool = False, reset: bool = Fal
     from polybot.strategy import EdgeStrategy, LegacyStrategy, ReversalStrategy
 
     sizing_mode = os.getenv("SIZING_MODE", "canonical")
-    exec_mode = os.getenv("EXECUTION_MODE", "paper").lower()
+    exec_mode = (mode or os.getenv("EXECUTION_MODE", "paper")).lower()
     is_live = exec_mode == "live"
     if is_live:
         config.live.is_live_requested = True
@@ -765,6 +771,7 @@ def main() -> None:
     paper_parser.add_argument("--demo", action="store_true", help="Simulate 5m market price & probability swings to test UI and strategy")
     paper_parser.add_argument("--reset", action="store_true", help="Reset all trades and capital state to starting balance")
     paper_parser.add_argument("--paused", action="store_true", help="Start bot in paused state awaiting manual resume")
+    paper_parser.add_argument("--mode", choices=["paper", "live"], default=None, help="Execution mode override (paper or live)")
 
     # Dashboard standalone command
     dash_parser = subparsers.add_parser("dashboard", help="Run local web dashboard standalone")
@@ -809,6 +816,7 @@ def main() -> None:
                     demo=getattr(args, "demo", False),
                     reset=getattr(args, "reset", False),
                     paused=getattr(args, "paused", False),
+                    mode=getattr(args, "mode", None),
                 )
             )
         except KeyboardInterrupt:
