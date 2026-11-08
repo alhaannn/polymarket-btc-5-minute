@@ -83,6 +83,8 @@ async def run_paper(config: PolybotConfig, demo: bool = False, reset: bool = Fal
     sizing_mode = os.getenv("SIZING_MODE", "canonical")
     exec_mode = os.getenv("EXECUTION_MODE", "paper").lower()
     is_live = exec_mode == "live"
+    if is_live:
+        config.live.is_live_requested = True
     db_name = "live_ledger.db" if is_live else "paper_ledger.db"
     mode_label = "LIVE TRADING" if is_live else "PAPER MODE"
 
@@ -127,7 +129,17 @@ async def run_paper(config: PolybotConfig, demo: bool = False, reset: bool = Fal
         demo,
     )
 
-    engine = PaperExecutionEngine(config.strategy, ledger=ledger)
+    if is_live:
+        from polybot.execution.live import LiveExecutionEngine, create_clob_client
+        clob_client = None
+        try:
+            clob_client = create_clob_client(config)
+            log.info("Live Polymarket CLOB client initialized and authenticated")
+        except Exception as e:
+            log.error("Failed to initialize Live CLOB client: %s", e)
+        engine = LiveExecutionEngine(config=config, clob_client=clob_client, ledger=ledger)
+    else:
+        engine = PaperExecutionEngine(config.strategy, ledger=ledger)
     client = PolymarketClient(config.feeds.gamma_rest_url, config.feeds.clob_rest_url)
     health = FeedHealthTracker(config.feeds.max_feed_staleness_sec, max_divergence_pct=config.feeds.max_divergence_pct)
     risk = RiskManager(config.risk)
@@ -482,8 +494,9 @@ async def run_paper(config: PolybotConfig, demo: bool = False, reset: bool = Fal
                 sig = strat.on_tick(cur_price, now, clob.side_books, health)
                 if sig:
                     if sig.action == "SELL":
+                        tok_id = current_tokens.get(sig.side) if current_tokens else None
                         order = Order(
-                            order_id=f"paper-{int(now * 1000)}",
+                            order_id=f"live-{int(now * 1000)}" if is_live else f"paper-{int(now * 1000)}",
                             slug=sig.slug,
                             side=sig.side,
                             action=sig.action,
@@ -498,6 +511,7 @@ async def run_paper(config: PolybotConfig, demo: bool = False, reset: bool = Fal
                             trigger_prob=sig.trigger_prob,
                             counterpart_prob=sig.counterpart_prob,
                             data_receipt_ts=sig.data_receipt_ts,
+                            token_id=tok_id,
                         )
                         engine.submit_order(order)
                         dash_state.add_log(
@@ -557,8 +571,9 @@ async def run_paper(config: PolybotConfig, demo: bool = False, reset: bool = Fal
                         stake_usd, current_window_idx, active_capital_usd=capital_mgr.state.active_capital
                     )
                     if allowed:
+                        tok_id = current_tokens.get(sig.side) if current_tokens else None
                         order = Order(
-                            order_id=f"paper-{int(now * 1000)}",
+                            order_id=f"live-{int(now * 1000)}" if is_live else f"paper-{int(now * 1000)}",
                             slug=sig.slug,
                             side=sig.side,
                             action=sig.action,
@@ -573,6 +588,7 @@ async def run_paper(config: PolybotConfig, demo: bool = False, reset: bool = Fal
                             trigger_prob=sig.trigger_prob,
                             counterpart_prob=sig.counterpart_prob,
                             data_receipt_ts=sig.data_receipt_ts,
+                            token_id=tok_id,
                         )
                         engine.submit_order(order)
                         risk.record_trade_placed(stake_usd)

@@ -230,7 +230,7 @@ class LiveConfig:
     @classmethod
     def from_env(cls) -> LiveConfig:
         return cls(
-            is_live_requested=False,  # must be explicitly set via CLI flag
+            is_live_requested=os.getenv("EXECUTION_MODE", "").lower() == "live",
             live_confirm_token=os.getenv("LIVE_CONFIRM", ""),
             private_key=os.getenv("POLY_PRIVATE_KEY", ""),
             funder_address=os.getenv("POLY_FUNDER_ADDRESS", ""),

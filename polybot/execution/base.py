@@ -26,6 +26,7 @@ class Order:
     trigger_prob: float = 0.0
     counterpart_prob: float = 0.0
     data_receipt_ts: float = 0.0
+    token_id: Optional[str] = None
 
 
 @dataclass
@@ -45,6 +46,7 @@ class Fill:
     trigger_prob: float = 0.0
     counterpart_prob: float = 0.0
     data_receipt_ts: float = 0.0
+    token_id: Optional[str] = None
 
 
 @dataclass
@@ -68,6 +70,7 @@ class Position:
     trigger_prob: float = 0.0
     counterpart_prob: float = 0.0
     data_receipt_ts: float = 0.0
+    token_id: Optional[str] = None
 
 
 class ExecutionEngine(ABC):
