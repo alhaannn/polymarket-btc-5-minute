@@ -1,213 +1,126 @@
-# AWS Ireland (`eu-west-1`) Live Trading Deployment & Operations Guide
+# AWS Ireland (`eu-west-1`) Unified Bot Operations Guide (Live & Paper)
 
-This guide provides end-to-end instructions for launching, provisioning, configuring, and operating the **Polymarket 5-Minute BTC Bot** in **AWS Ireland (`eu-west-1`)** for **LIVE real-money trading**.
-
----
-
-## 1. Live Production Instance Reference
-
-| Parameter | Current Live Production Value |
-| :--- | :--- |
-| **Instance Public IPv4** | **`3.252.144.120`** |
-| **AWS Region** | Europe (Ireland) `eu-west-1` |
-| **Operating System** | Ubuntu Server 24.04 LTS (HVM) |
-| **PM2 Process Name** | **`polybot-live`** (PID 12436, auto-reboot via systemd) |
-| **Execution Mode** | **`EXECUTION_MODE=live`** (Double-gate unlocked with `LIVE_CONFIRM=YES_I_UNDERSTAND`) |
-| **Current Bot Status** | **`PAUSED`** (Awaiting wallet funding; zero orders will fire) |
-| **Direct Web Dashboard** | 👉 **[http://3.252.144.120:8080](http://3.252.144.120:8080)** |
-| **SSH Key Path (Local)** | `C:\Users\HP Victus\Downloads\linux server\polymarket-ireland-key.pem` |
-| **Repository Path** | `/home/ubuntu/polymarket-btc-5-minute` (Branch: `feature/new-5m-strategy`) |
-| **Live Ledger Database** | `/home/ubuntu/polymarket-btc-5-minute/data/live_ledger.db` |
-| **USDC Wallet Address** | `0x5923CFc24AA6f876f27bc9257890126a8c3E72B6` (Signature Type 2) |
-| **Old Virginia Instance** | `54.226.232.16` (`polybot-paper`, retained purely for paper trading) |
+This guide documents the single-server consolidated architecture for the **Polymarket 5-Minute BTC Bot** hosted on **AWS Ireland (`eu-west-1`)**. Both **Live Real-Money Trading** and **Paper Trading Simulation** run concurrently under PM2 on independent ports with dedicated databases.
 
 ---
 
-## 2. Why AWS Ireland (`eu-west-1`)?
+## 1. Unified Production Instance Reference
 
-| Metric | AWS Virginia (`us-east-1`) | AWS Ireland (`eu-west-1`) |
+| Parameter | Live Trading Process | Paper Trading Process |
 | :--- | :--- | :--- |
-| **Polymarket Geoblock** | ❌ **BLOCKED (`blocked: true`)** | ✅ **PERMITTED (`blocked: false`)** |
-| **Order Execution** | ❌ HTTP 403 Forbidden | ✅ Full CLOB Taker/Maker execution |
-| **Latency to Polymarket CLOB** | ~80ms–110ms | ⚡ **Sub-2ms to 5ms** (Direct fiber to London `eu-west-2`) |
-| **Binance WebSocket Feed** | ❌ HTTP 451 Geo-Restricted | ✅ Native sub-second price ticks (`HTTP 200`) |
+| **Instance Public IPv4** | **`3.252.144.120`** | **`3.252.144.120`** |
+| **AWS Region** | Europe (Ireland) `eu-west-1` | Europe (Ireland) `eu-west-1` |
+| **Operating System** | Ubuntu Server 24.04 LTS (HVM) | Ubuntu Server 24.04 LTS (HVM) |
+| **PM2 Process Name** | **`polybot-live`** (ID: 0) | **`polybot-paper`** (ID: 1) |
+| **Web Dashboard URL** | 👉 **[http://3.252.144.120:8080](http://3.252.144.120:8080)** | 👉 **[http://3.252.144.120:8081](http://3.252.144.120:8081)** |
+| **Port** | `8080` | `8081` |
+| **Execution Mode** | `EXECUTION_MODE=live` (CLOB real orders) | `EXECUTION_MODE=paper` (Simulated taker) |
+| **Bot Status** | **`PAUSED`** (Awaiting wallet deposit) | **`RUNNING`** (Continuous benchmark) |
+| **Ledger Database** | `/data/live_ledger.db` (Clean, $11 seed) | `/data/paper_ledger.db` (Migrated, **$37.63** equity) |
+| **SSH Key Path (Local)** | `C:\Users\HP Victus\Downloads\linux server\polymarket-ireland-key.pem` | `C:\Users\HP Victus\Downloads\linux server\polymarket-ireland-key.pem` |
+| **Repository Path** | `/home/ubuntu/polymarket-btc-5-minute` | `/home/ubuntu/polymarket-btc-5-minute` |
+| **Branch** | `feature/new-5m-strategy` | `feature/new-5m-strategy` |
+| **Virginia EC2 (`54.226.232.16`)** | **DECOMMISSIONED** (All paper data transferred to Ireland; Virginia can be terminated) |
 
 ---
 
-## 3. Quick Connect & Verification Commands
+## 2. Why Ireland (`eu-west-1`) for Both Processes?
 
-### 3.1 SSH into Ireland Instance
-From local Windows PowerShell:
-```powershell
-ssh -i "C:\Users\HP Victus\Downloads\linux server\polymarket-ireland-key.pem" ubuntu@3.252.144.120
-```
-
-### 3.2 Verify Compliance & Feed Status
-```bash
-# 1. Verify Binance WebSocket price ticks
-curl -sI https://api.binance.com/api/v3/ping
-# Expected: HTTP/2 200
-
-# 2. Verify Polymarket CLOB Order Book access
-curl -s "https://clob.polymarket.com/markets" | head -c 100
-# Expected: Valid market metadata JSON
-```
-
-### 3.3 Verify Live Dashboard & Process Status
-```bash
-# Check PM2 process table
-pm2 status
-
-# Check last 30 log lines
-pm2 logs polybot-live --lines 30 --nostream
-
-# Query live bot telemetry endpoint
-curl -s http://localhost:8080/api/state
-```
+1. **Zero Geoblocking:** Polymarket CLOB permits Ireland (`eu-west-1`), while Virginia (`us-east-1`) returns HTTP 403.
+2. **Binance Direct Feed:** Ireland accesses native Binance public feeds without geo-restrictions.
+3. **Ultra-Low Latency:** Direct fiber to Polymarket matching engine in London (`eu-west-2`) with sub-5ms round-trip latency.
+4. **Cost Optimization:** Consolidated from two EC2 instances down to **one single instance**, eliminating duplicate AWS monthly server costs.
 
 ---
 
-## 4. Live Money Trading Activation (Funding & Unpausing)
+## 3. Concurrency & Rate Limit Safeguards
 
-### 4.1 Wallet Funding
-Deposit starting collateral into your Polymarket wallet address on the **Polygon (PoS)** network:
+Both bots operate simultaneously on the single Ireland IP without risk of rate limits:
+
+| Feed / Service | Combined Ireland Consumption | Provider Limit | Headroom / Safety Margin |
+| :--- | :--- | :--- | :--- |
+| **Polymarket CLOB WS** | 4 token subscriptions (2 live + 2 paper) | 500 tokens / connection | **>99% safety margin** |
+| **Binance Price WS** | 2 WebSocket connections | 300 connections / IP | **>99% safety margin** |
+| **Polymarket REST Polling** | ~1 request / 5 minutes (Gamma Discovery) | 60 requests / minute | **<2% of limit** |
+| **CLOB API Rate Limits** | 0 orders from paper (RAM only) | 100 requests / second | **Completely unaffected** |
+| **Database Locks** | `live_ledger.db` and `paper_ledger.db` are separate SQLite files in WAL mode | N/A | **Zero contention** |
+
+---
+
+## 4. Web Dashboard & 4-Stage Execution Bar
+
+Both dashboards (`:8080` and `:8081`) feature the upgraded **4-Stage Execution Progress Bar**:
+
+- **Stage 1 (0s – 180s): Observation Gate** (Muted gray) — Market price and order book depth tracking.
+- **Stage 2 (180s – 210s): Initial Snipe** (Bright green pulse) — 30-second prime probability entry window ($1.00 canonical stake).
+- **Stage 3 (210s – 280s): Reversal Recovery** (Amber) — 10x reversal hedge window ($10.00 stake) if BTC price swings.
+- **Stage 4 (280s – 300s): Pre-settlement Lockout** (Slate gray) — No new orders permitted before final expiry.
+
+---
+
+## 5. Live Money Activation Checklist
+
+### 5.1 Funding the Live Wallet
+Deposit USDC into your Polymarket wallet on **Polygon (PoS)**:
 - **Wallet Address:** `0x5923CFc24AA6f876f27bc9257890126a8c3E72B6`
-- **Asset:** **USDC.e** (Bridged USDC on Polygon) or Native USDC
-- **Recommended Deposit:** **$15.00 to $25.00** (Covers initial $1.00 stake, 10x reversal stake, and daily loss buffer)
-- **Gas (POL / MATIC):** ~0.2 POL for token transfer/approval transactions
-- **Prior Trading Note:** Since this wallet has already traded on Polymarket in the past, token approvals for Polymarket CTF Exchange contracts are already established.
+- **Asset:** **USDC.e** (Bridged) or native **USDC**
+- **Recommended Deposit:** **$15.00 – $25.00**
+- **Gas Reserve:** 0.2 POL (MATIC) for transaction gas
+- **Pre-Approved:** Wallet previously traded on Polymarket; token approvals are active.
 
-### 4.2 How to Unpause the Bot
-Once the funds arrive in your wallet:
-
-#### Option A: One-Click from Browser (Recommended)
-1. Open **[http://3.252.144.120:8080](http://3.252.144.120:8080)** in your browser.
-2. Click the **`▶ Run`** button in the top-right header controls.
-3. The bot status pill will immediately switch from `PAUSED` (amber) to `RUNNING` (green).
-
-#### Option B: Terminal Command
-```bash
-ssh -i "C:\Users\HP Victus\Downloads\linux server\polymarket-ireland-key.pem" ubuntu@3.252.144.120 "cd /home/ubuntu/polymarket-btc-5-minute && sed -i 's/^PAUSED=.*/PAUSED=false/' .env && pm2 restart polybot-live --update-env"
-```
+### 5.2 Unpausing Live Trading
+Once funds arrive:
+1. Open **[http://3.252.144.120:8080](http://3.252.144.120:8080)**.
+2. Click **`▶ Run`** in the top navigation bar.
+3. The status flips to **`RUNNING`** and will begin evaluating live markets.
 
 ---
 
-## 5. Live Architecture & Sizing Safeguards
+## 6. PM2 Operational Commands
 
-The bot operates under strict canonical sizing and risk limits configured in `/home/ubuntu/polymarket-btc-5-minute/.env`:
-
-```ini
-# =====================================================================
-# POLYMARKET 5-MINUTE LIVE PRODUCTION CONFIGURATION (IRELAND)
-# =====================================================================
-
-# 1. Mandatory Safety Double-Gate
-LIVE_CONFIRM=YES_I_UNDERSTAND
-EXECUTION_MODE=live
-PAUSED=true
-
-# 2. Polygon Wallet Configuration
-POLY_PRIVATE_KEY=0x...
-POLY_SIGNER_ADDRESS=0x284f018FfF5B0Ec392440693eB30d13ae5f2604F
-POLY_FUNDER_ADDRESS=0x5923CFc24AA6f876f27bc9257890126a8c3E72B6
-POLY_SIG_TYPE=2
-POLYGON_RPC_URL=https://polygon-bor-rpc.publicnode.com
-
-# 3. Canonical Sizing ($1 Initial / 10x Reversal Scaling)
-SIZING_MODE=canonical
-INITIAL_STAKE_USD=1.00
-REVERSAL_STAKE_USD=10.00
-REVERSAL_MULTIPLIER=10.0
-MICRO_STAKE_CAP_USD=10.00
-
-# 4. Core Sniper & Reversal Thresholds
-PRIME_HOURS_ONLY=true
-ENABLE_REVERSALS=true
-INITIAL_PROB_MIN=0.89
-INITIAL_PROB_MAX=0.91
-PRICE_CEILING=0.910
-REVERSAL_PRICE_CEILING=0.930
-MAX_SLIPPAGE=0.035
-REVERSAL_PROB_MIN=0.85
-REVERSAL_PROB_MAX=0.95
-REVERSAL_WINDOW_START_SEC=180.0
-INITIAL_SNIPE_END_SEC=210.0
-REVERSAL_WINDOW_END_SEC=300.0
-EARLY_EXIT=false
-
-# 5. Risk Circuit Breakers
-DAILY_LOSS_LIMIT_USD=6.00
-DAILY_LOSS_LIMIT_PCT=0.30
-DAILY_LOSS_MIN_USD=6.00
-PAUSE_CONSECUTIVE_LOSSES=3
-PAUSE_DURATION_WINDOWS=3
-KILL_SWITCH_FILE=STOP
-
-# 6. Dashboard Configuration
-DASHBOARD_HOST=0.0.0.0
-DASHBOARD_PORT=8080
-DASHBOARD_ENABLED=true
+### 6.1 Check Bot Status
+```bash
+ssh -i "C:\Users\HP Victus\Downloads\linux server\polymarket-ireland-key.pem" ubuntu@3.252.144.120 "pm2 status"
 ```
 
-### Safety Features Built-in:
-1. **Pre-Execution Balance Check:** Before posting each order to Polymarket CLOB, `LiveExecutionEngine` queries your on-chain collateral balance. If available balance < stake amount, the trade is rejected (fail-closed) rather than failing on-chain.
-2. **Order Dispatched to CLOB:** Orders are signed with the local private key using Level 2 authentication and posted to `POST https://clob.polymarket.com/order`.
-3. **Rejection Callback Unlatching:** If an order is rejected (e.g., due to price movement or insufficient funds), the strategy state unlatches immediately with a 1-second cooldown, preventing state locks.
-4. **Hard Stake Cap:** Stakes are strictly capped at `$10.00` via `MICRO_STAKE_CAP_USD=10.00`.
-5. **Daily Loss Breaker:** If cumulative daily losses exceed `$6.00`, trading halts automatically until the next trading day (Option B reserve protection).
-
----
-
-## 6. Operations & Maintenance Playbook
-
-### 6.1 View Live Logs in Real Time
+### 6.2 View Real-Time Logs
 ```bash
+# Paper trading logs (Port 8081)
+ssh -i "C:\Users\HP Victus\Downloads\linux server\polymarket-ireland-key.pem" ubuntu@3.252.144.120 "pm2 logs polybot-paper"
+
+# Live trading logs (Port 8080)
 ssh -i "C:\Users\HP Victus\Downloads\linux server\polymarket-ireland-key.pem" ubuntu@3.252.144.120 "pm2 logs polybot-live"
 ```
 
-### 6.2 Pause Trading Immediately
-- **From Browser:** Click **`⏸ Pause`** on the dashboard.
-- **From CLI:**
-  ```bash
-  ssh -i "C:\Users\HP Victus\Downloads\linux server\polymarket-ireland-key.pem" ubuntu@3.252.144.120 "curl -s -X POST http://localhost:8080/api/control -H 'Content-Type: application/json' -d '{\"action\":\"PAUSE\"}'"
-  ```
-
-### 6.3 Emergency Hard Stop (Kill Switch)
+### 6.3 Restart or Pause
 ```bash
-# Method 1: Drop STOP kill-switch file
-ssh -i "C:\Users\HP Victus\Downloads\linux server\polymarket-ireland-key.pem" ubuntu@3.252.144.120 "touch /home/ubuntu/polymarket-btc-5-minute/STOP"
+# Restart paper bot
+pm2 restart polybot-paper
 
-# Method 2: Stop PM2 process
-ssh -i "C:\Users\HP Victus\Downloads\linux server\polymarket-ireland-key.pem" ubuntu@3.252.144.120 "pm2 stop polybot-live"
+# Restart live bot
+pm2 restart polybot-live
+
+# Pause live bot from CLI
+curl -s -X POST http://localhost:8080/api/control -H 'Content-Type: application/json' -d '{"action":"PAUSE"}'
+
+# Resume paper bot from CLI
+curl -s -X POST http://localhost:8081/api/control -H 'Content-Type: application/json' -d '{"action":"START"}'
 ```
 
-### 6.4 Pull Code Updates from GitHub
+### 6.4 Save Process State to Systemd
+Whenever PM2 process list is updated:
 ```bash
-ssh -i "C:\Users\HP Victus\Downloads\linux server\polymarket-ireland-key.pem" ubuntu@3.252.144.120 "cd /home/ubuntu/polymarket-btc-5-minute && git pull origin feature/new-5m-strategy && pm2 restart polybot-live --update-env"
+pm2 save
 ```
-
-### 6.5 Reset Live Trade Logs & Ledger
-If you want to clear historical logs and reset the database to a clean starting slate:
-```bash
-ssh -i "C:\Users\HP Victus\Downloads\linux server\polymarket-ireland-key.pem" ubuntu@3.252.144.120 "cd /home/ubuntu/polymarket-btc-5-minute && rm -f data/live_ledger.db && pm2 flush && pm2 restart polybot-live --update-env"
-```
-
-### 6.6 Systemd Reboot Persistence
-PM2 is registered with systemd under `/etc/systemd/system/pm2-ubuntu.service`:
-- Configured as `Type=oneshot` with `RemainAfterExit=yes`
-- Auto-resurrects `polybot-live` from `/home/ubuntu/.pm2/dump.pm2` on system reboot.
-- To re-freeze the process list after configuration changes:
-  ```bash
-  pm2 save
-  ```
 
 ---
 
-## 7. Dual Server Topology Summary
+## 7. Virginia EC2 Decommissioning Procedure
 
-| Server | Region | IP | Function | Mode |
-| :--- | :--- | :--- | :--- | :--- |
-| **Ireland EC2** | `eu-west-1` | **`3.252.144.120`** | **LIVE REAL-MONEY TRADING** | `EXECUTION_MODE=live` (CLOB orders) |
-| **Virginia EC2** | `us-east-1` | **`54.226.232.16`** | **PAPER TRADING BENCHMARK** | `EXECUTION_MODE=paper` (Simulation) |
+Since the paper database and all 76+ trades ($37.63 total equity) have been safely migrated and verified running on Ireland port 8081:
 
-Both servers run independently with zero cross-talk, keeping your live capital isolated while preserving your continuous paper-trading benchmark.
+1. Log into your **AWS Management Console**.
+2. Navigate to **EC2** $\to$ **Instances** in region **`us-east-1` (N. Virginia)**.
+3. Locate instance `54.226.232.16` (named `polymarket-bot` or similar).
+4. Select **Instance state** $\to$ **Terminate instance**.
+5. All monthly costs for Virginia EC2 are now permanently eliminated.
