@@ -761,8 +761,23 @@ async function fetchCapital() {
 function renderCapital(cap) {
   if (!cap) return;
 
+  const isLive = (cap.execution_mode === 'live') || (dashState && dashState.execution_mode === 'live');
+
   const totalEl = document.getElementById('val-cap-total');
   if (totalEl) totalEl.textContent = `$${(cap.total_equity || 0).toFixed(2)}`;
+
+  const totalSubEl = document.getElementById('val-cap-total-sub');
+  if (totalSubEl) {
+    if (isLive) {
+      if ((cap.total_equity || 0) < 1.0) {
+        totalSubEl.textContent = 'Live Wallet (Awaiting Deposit, Min $1.00)';
+      } else {
+        totalSubEl.textContent = 'Live Polymarket Collateral';
+      }
+    } else {
+      totalSubEl.textContent = 'Canonical Base: $11.00';
+    }
+  }
 
   const activeEl = document.getElementById('val-cap-active');
   const activeSubEl = document.getElementById('val-cap-active-sub');
@@ -771,7 +786,11 @@ function renderCapital(cap) {
     activeEl.textContent = `$${spendable.toFixed(2)}`;
     if (activeSubEl) {
       const reserved = cap.active_funds_reserved !== undefined ? cap.active_funds_reserved : (cap.open_exposure || 0);
-      activeSubEl.textContent = `Reserved: $${reserved.toFixed(2)} | Total Active: $${(cap.active_capital || 0).toFixed(2)}`;
+      if (isLive) {
+        activeSubEl.textContent = `Reserved: $${reserved.toFixed(2)} | Live Available: $${spendable.toFixed(2)}`;
+      } else {
+        activeSubEl.textContent = `Reserved: $${reserved.toFixed(2)} | Total Active: $${(cap.active_capital || 0).toFixed(2)}`;
+      }
     }
   }
 

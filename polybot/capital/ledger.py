@@ -311,6 +311,54 @@ class CapitalLedger:
 
             conn.commit()
 
+    def save_state(self, state: CapitalState) -> None:
+        """Atomically persists the updated capital state singleton without a transaction row."""
+        now = time.time()
+        state.updated_at_ts = now
+        with self._get_connection() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO capital_state (
+                    id, total_equity_cents, active_capital_cents, protected_capital_cents,
+                    realized_profit_cents, realized_loss_cents, active_shortfall_cents,
+                    milestone_44_activated, daily_shutdown_status, daily_shutdown_reason,
+                    daily_shutdown_trading_day, daily_failed_initial_count,
+                    daily_failed_reversal_count, daily_failure_trading_day,
+                    next_day_activation_eligible, shutdown_until_ts, last_activated_shutdown_event_id,
+                    last_activation_trading_day, last_processed_settlement_id,
+                    last_reconciliation_ts, last_reconciliation_status,
+                    last_reconciliation_diff_cents, reconciliation_blocked,
+                    capital_ledger_version, updated_at_ts
+                ) VALUES (
+                    1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                )
+            """, (
+                state.total_equity_cents,
+                state.active_capital_cents,
+                state.protected_capital_cents,
+                state.realized_profit_cents,
+                state.realized_loss_cents,
+                state.active_shortfall_cents,
+                1 if state.milestone_44_activated else 0,
+                1 if state.daily_shutdown_status else 0,
+                state.daily_shutdown_reason,
+                state.daily_shutdown_trading_day,
+                state.daily_failed_initial_count,
+                state.daily_failed_reversal_count,
+                state.daily_failure_trading_day,
+                1 if state.next_day_activation_eligible else 0,
+                state.shutdown_until_ts,
+                state.last_activated_shutdown_event_id,
+                state.last_activation_trading_day,
+                state.last_processed_settlement_id,
+                state.last_reconciliation_ts,
+                state.last_reconciliation_status,
+                state.last_reconciliation_diff_cents,
+                1 if state.reconciliation_blocked else 0,
+                state.capital_ledger_version,
+                state.updated_at_ts,
+            ))
+            conn.commit()
+
     def is_settlement_processed(self, settlement_id: str) -> bool:
         """Checks if a settlement has already been processed (idempotency guard)."""
         with self._get_connection() as conn:

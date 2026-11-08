@@ -91,6 +91,7 @@ def create_dashboard_app(
             init_b, rev_b = capital_mgr.get_trade_budgets()
             cap_dict["current_initial_budget"] = init_b
             cap_dict["current_reversal_budget"] = rev_b
+        cap_dict["execution_mode"] = getattr(state, "execution_mode", "paper")
         return JSONResponse(cap_dict)
 
     async def get_capital_transactions(request: Request) -> JSONResponse:

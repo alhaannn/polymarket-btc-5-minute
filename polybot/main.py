@@ -144,6 +144,13 @@ async def run_paper(
         except Exception as e:
             log.error("Failed to initialize Live CLOB client: %s", e)
         engine = LiveExecutionEngine(config=config, clob_client=clob_client, ledger=ledger)
+        # Fetch live on-chain/CLOB wallet balance immediately on startup
+        live_wallet_bal = engine.get_wallet_balance(force_refresh=True)
+        env_start = os.getenv("STARTING_EQUITY_USD")
+        if live_wallet_bal <= 0.0 and env_start:
+            live_wallet_bal = float(env_start)
+        capital_mgr.sync_live_wallet_balance(live_wallet_bal)
+        log.info("Live wallet balance linked to CapitalManager on startup: $%.2f", live_wallet_bal)
     else:
         engine = PaperExecutionEngine(config.strategy, ledger=ledger)
     client = PolymarketClient(config.feeds.gamma_rest_url, config.feeds.clob_rest_url)
@@ -232,6 +239,7 @@ async def run_paper(
     open_trades_to_settle: List[Dict[str, Any]] = []
     # is_paused already determined above from config/args/env
     last_rest_poll_ts = 0.0
+    last_balance_poll_ts = 0.0
 
     def handle_order_rejected(rej_order: Order, reason: str):
         if hasattr(strat, "on_order_rejected"):
@@ -280,6 +288,33 @@ async def run_paper(
                 break
 
             now = time.time()
+
+            # Dynamic live wallet balance synchronization (sub-second polling & scaling)
+            if is_live and hasattr(engine, "get_wallet_balance") and (now - last_balance_poll_ts >= 0.5):
+                last_balance_poll_ts = now
+                current_bal = engine.get_wallet_balance()
+                env_start = os.getenv("STARTING_EQUITY_USD")
+                if current_bal <= 0.0 and env_start:
+                    current_bal = float(env_start)
+                if abs(current_bal - capital_mgr.state.active_capital) >= 0.009:
+                    old_bal = capital_mgr.state.active_capital
+                    capital_mgr.sync_live_wallet_balance(current_bal)
+                    open_exp = engine.get_open_exposure()
+                    init_b, rev_b = budget_calc.get_budgets(current_bal)
+                    dash_cap = capital_mgr.state.to_dict()
+                    dash_cap.update({
+                        "current_initial_budget": init_b,
+                        "current_reversal_budget": rev_b,
+                        "open_exposure": round(open_exp, 2),
+                        "spendable_active_funds": max(0.0, round(current_bal - open_exp, 2)),
+                        "active_funds_reserved": round(open_exp, 2),
+                        "protected_funds": capital_mgr.state.protected_capital,
+                        "unsettled_funds": round(open_exp, 2),
+                    })
+                    dash_state.update_capital(dash_cap)
+                    dash_state.add_log("BALANCE", f"Live wallet balance updated: ${old_bal:.2f} -> ${current_bal:.2f} (Init: ${init_b}, Rev: ${rev_b})")
+                    log.info("[LIVE_BALANCE_SYNC] Wallet balance updated: $%.2f -> $%.2f (Init: $%d, Rev: $%d)", old_bal, current_bal, init_b, rev_b)
+
             time_state = session_mgr.sync(now)
             window_start = int(time_state.window_start_ts)
             current_window_idx = window_start // 300

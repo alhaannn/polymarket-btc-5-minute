@@ -57,6 +57,28 @@ class CapitalManager:
         self.state = self.ledger.get_state()
         log.info("[CAPITAL_RESET] CapitalManager state reset to $%.2f starting equity", starting_equity_usd)
 
+    def sync_live_wallet_balance(self, live_balance_usd: float) -> bool:
+        """
+        Synchronizes CapitalManager state with the real-time live wallet balance from Polymarket CLOB.
+        Dynamically scales active capital and total equity to reflect external deposits/withdrawals.
+        Returns True if the balance changed.
+        """
+        new_cents = max(0, int(round(live_balance_usd * 100)))
+        if self.state.active_capital_cents == new_cents:
+            return False
+
+        old_active = self.state.active_capital
+        old_total = self.state.total_equity
+        self.state.active_capital_cents = new_cents
+        self.state.total_equity_cents = new_cents + self.state.protected_capital_cents
+        self.state.updated_at_ts = time.time()
+        self.ledger.save_state(self.state)
+        log.info(
+            "[LIVE_WALLET_SYNC] Real-time live balance updated: Active $%.2f -> $%.2f | Total $%.2f -> $%.2f",
+            old_active, self.state.active_capital, old_total, self.state.total_equity
+        )
+        return True
+
     def _initialize_starting_capital(self, starting_equity_usd: float) -> None:
         """Initializes canonical starting capital ($11.00 default = 1100 cents)."""
         from polybot.tz import ist_today_str

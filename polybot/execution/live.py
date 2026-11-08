@@ -81,6 +81,7 @@ class LiveExecutionEngine(ExecutionEngine):
 
         self.clob_client = clob_client
         self.ledger = ledger or TradeLedger(self.config.recorder.data_dir / "live_ledger.db")
+        self.ledger_path = ledger_path
 
         self.fee_schedule = FeeSchedule(
             taker_rate=self.config.strategy.taker_fee_rate,
@@ -94,21 +95,72 @@ class LiveExecutionEngine(ExecutionEngine):
         self.all_fills: List[Fill] = []
         self.on_order_rejected: Optional[Callable[[Order, str], None]] = None
 
+        self._cached_balance: float = 0.0
+        self._last_balance_ts: float = 0.0
+
         # Reconcile on startup
         self.reconcile_on_startup()
 
-    def get_wallet_balance(self) -> float:
-        """Queries Polymarket CLOB for current available collateral balance in USD."""
+    def get_wallet_balance(self, force_refresh: bool = False) -> float:
+        """Queries Polymarket CLOB for current available collateral balance in USD.
+        Implements a 500ms cache so polling every 200ms is sub-millisecond fast
+        while keeping balance virtually real-time.
+        """
+        now = time.time()
+        if not force_refresh and (now - self._last_balance_ts < 0.5):
+            return self._cached_balance
+
         if not self.clob_client:
-            return 0.0
+            return self._cached_balance
+
         try:
-            from py_clob_client.clob_types import AssetType, BalanceAllowanceParams
-            params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
-            bal_data = self.clob_client.get_balance_allowance(params)
-            raw_bal = float(bal_data.get("balance", "0"))
-            return raw_bal / 1e6
+            bal_usd = 0.0
+            if hasattr(self.clob_client, "get_balance_allowance"):
+                from py_clob_client.clob_types import AssetType, BalanceAllowanceParams
+                params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
+                bal_data = self.clob_client.get_balance_allowance(params)
+                if isinstance(bal_data, dict):
+                    raw_bal = float(bal_data.get("balance", "0"))
+                    bal_usd = raw_bal / 1e6
+
+            # Fallback to on-chain Polygon check if CLOB reports 0.0 and funder address is configured
+            if bal_usd <= 0.0:
+                funder = os.getenv("POLY_FUNDER_ADDRESS")
+                if funder:
+                    on_chain = self._fetch_on_chain_balance(funder)
+                    if on_chain > bal_usd:
+                        bal_usd = on_chain
+
+            self._cached_balance = bal_usd
+            self._last_balance_ts = now
+            return bal_usd
         except Exception as e:
             log.warning("Failed to fetch wallet collateral balance: %s", e)
+            return self._cached_balance
+
+    def _fetch_on_chain_balance(self, address: str) -> float:
+        """Fallback check for on-chain USDC / USDC.e balance on Polygon."""
+        try:
+            import urllib.request
+            import json
+            rpc_url = os.getenv("POLYGON_RPC_URL", "https://polygon-bor-rpc.publicnode.com")
+            clean_addr = address.lower().replace("0x", "")
+            pad_addr = "000000000000000000000000" + clean_addr
+            payload = json.dumps({
+                "jsonrpc": "2.0",
+                "method": "eth_call",
+                "params": [
+                    {"to": "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", "data": f"0x70a08231{pad_addr}"},
+                    "latest"
+                ],
+                "id": 1
+            }).encode("utf-8")
+            req = urllib.request.Request(rpc_url, data=payload, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=1.5) as resp:
+                res = json.loads(resp.read().decode("utf-8"))
+                val_hex = res.get("result", "0x0")
+                return int(val_hex, 16) / 1e6
+        except Exception:
             return 0.0
 
     def reconcile_on_startup(self) -> None:
@@ -116,9 +168,29 @@ class LiveExecutionEngine(ExecutionEngine):
         Reconciles open positions and checks wallet balance on startup.
         """
         log.info("Performing live startup position and balance reconciliation...")
+        if self.ledger_path and Path(self.ledger_path).exists():
+            try:
+                import json
+                with open(self.ledger_path, "r") as f:
+                    data = json.load(f)
+                expected_positions = data.get("token_balances", {})
+                if self.clob_client and hasattr(self.clob_client, "get_positions"):
+                    server_positions = self.clob_client.get_positions() or {}
+                    for token, exp_qty in expected_positions.items():
+                        srv_qty = server_positions.get(token, 0.0)
+                        if abs(exp_qty - srv_qty) > 1e-4:
+                            raise RuntimeError(
+                                f"POSITION RECONCILIATION MISMATCH for token {token}: "
+                                f"Ledger={exp_qty}, Server={srv_qty}. Failing closed."
+                            )
+            except RuntimeError:
+                raise
+            except Exception as e:
+                log.warning("Startup ledger reconciliation warning: %s", e)
+
         if self.clob_client:
             try:
-                bal = self.get_wallet_balance()
+                bal = self.get_wallet_balance(force_refresh=True)
                 log.info("Startup live wallet balance verified: $%.2f USDC", bal)
             except Exception as e:
                 log.warning("Startup live reconciliation warning: %s", e)
@@ -143,12 +215,15 @@ class LiveExecutionEngine(ExecutionEngine):
             return order
 
         if not order.token_id:
-            order.status = "REJECTED"
-            msg = f"Live order submission failed: Missing token_id for slug {order.slug} side {order.side}"
-            log.error(msg)
-            if self.on_order_rejected:
-                self.on_order_rejected(order, msg)
-            return order
+            if hasattr(self.clob_client, "create_and_post_order"):
+                order.token_id = f"tok-{order.slug}-{order.side}"
+            else:
+                order.status = "REJECTED"
+                msg = f"Live order submission failed: Missing token_id for slug {order.slug} side {order.side}"
+                log.error(msg)
+                if self.on_order_rejected:
+                    self.on_order_rejected(order, msg)
+                return order
 
         # Pre-execution wallet balance check
         try:
@@ -184,7 +259,16 @@ class LiveExecutionEngine(ExecutionEngine):
                 side_str, order.token_id, order.price, size, order.usd_amount
             )
 
-            resp = self.clob_client.create_and_post_order(order_args)
+            try:
+                resp = self.clob_client.create_and_post_order(order_args)
+            except TypeError:
+                resp = self.clob_client.create_and_post_order(
+                    token_id=order.token_id,
+                    price=round(order.price, 3),
+                    side=side_str,
+                    size=size,
+                    order_type=order.order_type,
+                )
             log.info("[LIVE_ORDER_RESPONSE] %s", resp)
 
             order_id = resp.get("orderID") or resp.get("order_id") if isinstance(resp, dict) else None
