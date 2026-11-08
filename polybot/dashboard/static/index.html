@@ -97,14 +97,24 @@
       </div>
 
       <div class="progress-container">
+        <div class="progress-zones">
+          <div class="zone-guide zone-waiting" style="left: 0%; width: 60%;" title="Observation Phase: 0s - 180s">OBSERVE (0–180s)</div>
+          <div class="zone-guide zone-snipe" style="left: 60%; width: 10%;" title="Initial Snipe Window: 180s - 210s">SNIPE (180–210s)</div>
+          <div class="zone-guide zone-reversal" style="left: 70%; width: 23.33%;" title="Reversal Window: 210s - 280s">REVERSAL (210–280s)</div>
+          <div class="zone-guide zone-lockout" style="left: 93.33%; width: 6.67%;" title="Settlement Lockout: 280s - 300s">LOCK</div>
+        </div>
         <div class="progress-track">
-          <div class="progress-bar-waiting" id="progress-bar-waiting" style="width: 0%;"></div>
-          <div class="progress-bar-trading" id="progress-bar-trading" style="width: 0%;"></div>
+          <div class="progress-bar-waiting" id="progress-bar-waiting" style="width: 0%;" title="0s - 180s"></div>
+          <div class="progress-bar-snipe" id="progress-bar-snipe" style="width: 0%;" title="180s - 210s"></div>
+          <div class="progress-bar-reversal" id="progress-bar-reversal" style="width: 0%;" title="210s - 280s"></div>
+          <div class="progress-bar-lockout" id="progress-bar-lockout" style="width: 0%;" title="280s - 300s"></div>
         </div>
         <div class="progress-markers">
-          <span class="marker marker-start">0s (Start)</span>
-          <span class="marker marker-gate">180s (Trading Window Opens)</span>
-          <span class="marker marker-end">300s (Expiry)</span>
+          <span class="marker marker-start">0s</span>
+          <span class="marker marker-gate">180s Gate</span>
+          <span class="marker marker-snipe">210s Snipe End</span>
+          <span class="marker marker-rev">280s Rev Cutoff</span>
+          <span class="marker marker-end">300s</span>
         </div>
       </div>
 

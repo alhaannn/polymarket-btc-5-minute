@@ -322,31 +322,53 @@ function renderState(state) {
   const slugEl = document.getElementById('val-market-slug');
   if (slugEl) slugEl.textContent = state.current_slug || 'Scanning for active market...';
 
+  const elapsed = Math.min(300.0, Math.max(0.0, state.elapsed_sec));
+
+  // Dynamic Phase Badge (4 Stages)
   const phaseBadge = document.getElementById('badge-market-phase');
   if (phaseBadge) {
-    if (state.phase === 'WAITING') {
+    if (elapsed < 180.0) {
       phaseBadge.className = 'phase-badge phase-waiting';
-      phaseBadge.textContent = 'WAITING PHASE (0 - 180s)';
-    } else if (state.phase === 'ACTIVE') {
-      phaseBadge.className = 'phase-badge phase-active';
-      phaseBadge.textContent = 'ACTIVE TRADING WINDOW (180 - 300s)';
+      phaseBadge.textContent = `WAITING PHASE (0 - 180s) • ${(180.0 - elapsed).toFixed(0)}s left`;
+    } else if (elapsed < 210.0) {
+      phaseBadge.className = 'phase-badge phase-snipe';
+      phaseBadge.textContent = `INITIAL SNIPE ACTIVE (180 - 210s) • ${(210.0 - elapsed).toFixed(0)}s left`;
+    } else if (elapsed < 280.0) {
+      phaseBadge.className = 'phase-badge phase-reversal';
+      phaseBadge.textContent = `REVERSAL WINDOW (210 - 280s) • ${(280.0 - elapsed).toFixed(0)}s left`;
+    } else if (elapsed < 300.0) {
+      phaseBadge.className = 'phase-badge phase-lockout';
+      phaseBadge.textContent = `SETTLEMENT LOCKOUT (280 - 300s) • ${(300.0 - elapsed).toFixed(0)}s left`;
     } else {
       phaseBadge.className = 'phase-badge phase-closed';
       phaseBadge.textContent = 'MARKET CLOSED / SETTLING (>= 300s)';
     }
   }
 
-  // Progress bars (300s cycle)
-  const elapsed = Math.min(300.0, Math.max(0.0, state.elapsed_sec));
-  const waitingBar = document.getElementById('progress-bar-waiting');
-  const tradingBar = document.getElementById('progress-bar-trading');
+  // 4-Stage Progress Bars (300s cycle)
+  // Stage 1: 0s - 180s (Observation: 180s duration = 60.0% of total)
+  // Stage 2: 180s - 210s (Initial Snipe: 30s duration = 10.0% of total)
+  // Stage 3: 210s - 280s (Reversal Recovery: 70s duration = 23.33% of total)
+  // Stage 4: 280s - 300s (Pre-Settlement Lockout: 20s duration = 6.67% of total)
+  const waitingElapsed = Math.min(180.0, elapsed);
+  const snipeElapsed = Math.max(0.0, Math.min(30.0, elapsed - 180.0));
+  const revElapsed = Math.max(0.0, Math.min(70.0, elapsed - 210.0));
+  const lockElapsed = Math.max(0.0, Math.min(20.0, elapsed - 280.0));
 
-  if (waitingBar && tradingBar) {
-    const waitingPct = (Math.min(180.0, elapsed) / 300.0) * 100.0;
-    const tradingPct = (Math.max(0.0, elapsed - 180.0) / 300.0) * 100.0;
-    waitingBar.style.width = `${waitingPct}%`;
-    tradingBar.style.width = `${tradingPct}%`;
-  }
+  const waitingPct = (waitingElapsed / 300.0) * 100.0;
+  const snipePct = (snipeElapsed / 300.0) * 100.0;
+  const revPct = (revElapsed / 300.0) * 100.0;
+  const lockPct = (lockElapsed / 300.0) * 100.0;
+
+  const barWaiting = document.getElementById('progress-bar-waiting');
+  const barSnipe = document.getElementById('progress-bar-snipe');
+  const barRev = document.getElementById('progress-bar-reversal');
+  const barLock = document.getElementById('progress-bar-lockout');
+
+  if (barWaiting) barWaiting.style.width = `${waitingPct}%`;
+  if (barSnipe) barSnipe.style.width = `${snipePct}%`;
+  if (barRev) barRev.style.width = `${revPct}%`;
+  if (barLock) barLock.style.width = `${lockPct}%`;
 
   const elTime = document.getElementById('val-elapsed-time');
   if (elTime) elTime.textContent = `${state.elapsed_sec.toFixed(1)}s`;
@@ -354,17 +376,34 @@ function renderState(state) {
   const remTime = document.getElementById('val-remaining-time');
   if (remTime) remTime.textContent = `${state.remaining_sec.toFixed(1)}s`;
 
+  // Window Status Card with Exact Stage Context
   const winStatus = document.getElementById('val-window-status');
   if (winStatus) {
-    if (state.is_trading_allowed) {
-      winStatus.className = 'stat-value status-badge-active';
-      winStatus.textContent = 'ELIGIBLE (120s WINDOW)';
-    } else if (state.elapsed_sec < 180) {
+    if (elapsed < 180.0) {
       winStatus.className = 'stat-value status-badge-inactive';
-      winStatus.textContent = `WAITING (${(180 - state.elapsed_sec).toFixed(0)}s left)`;
+      winStatus.textContent = `OBSERVING (${(180.0 - elapsed).toFixed(0)}s left)`;
+    } else if (elapsed < 210.0) {
+      if (state.initial_order_triggered) {
+        winStatus.className = 'stat-value status-badge-active';
+        winStatus.textContent = `INITIAL PLACED (${state.initial_side || 'UP/DN'})`;
+      } else {
+        winStatus.className = 'stat-value status-badge-active';
+        winStatus.textContent = 'SNIPE OPEN (89%–91%)';
+      }
+    } else if (elapsed < 280.0) {
+      if (state.reversal_order_triggered) {
+        winStatus.className = 'stat-value status-badge-active';
+        winStatus.textContent = 'REVERSAL EXECUTED';
+      } else if (state.initial_order_triggered) {
+        winStatus.className = 'stat-value status-badge-active';
+        winStatus.textContent = 'RECOVERY MONITORING (85%–95%)';
+      } else {
+        winStatus.className = 'stat-value status-badge-inactive';
+        winStatus.textContent = 'SNIPE EXPIRED (PASS)';
+      }
     } else {
       winStatus.className = 'stat-value status-badge-inactive';
-      winStatus.textContent = 'CLOSED (NO NEW TRADES)';
+      winStatus.textContent = 'SETTLEMENT (LOCKED)';
     }
   }
 
