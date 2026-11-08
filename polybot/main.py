@@ -27,6 +27,8 @@ def setup_logging(verbose: bool = False) -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         handlers=[logging.StreamHandler(sys.stdout)],
     )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 async def run_recorder(config: PolybotConfig) -> None:
@@ -290,7 +292,7 @@ async def run_paper(
             now = time.time()
 
             # Dynamic live wallet balance synchronization (sub-second polling & scaling)
-            if is_live and hasattr(engine, "get_wallet_balance") and (now - last_balance_poll_ts >= 0.5):
+            if is_live and hasattr(engine, "get_wallet_balance") and (now - last_balance_poll_ts >= 1.0):
                 last_balance_poll_ts = now
                 current_bal = engine.get_wallet_balance()
                 env_start = os.getenv("STARTING_EQUITY_USD")
