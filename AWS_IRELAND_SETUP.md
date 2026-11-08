@@ -23,7 +23,7 @@
 | **Direct Web URL** | 👉 **[http://3.252.144.120:8080](http://3.252.144.120:8080)** | 👉 **[http://3.252.144.120:8081](http://3.252.144.120:8081)** |
 | **Execution Mode** | `EXECUTION_MODE=live` (CLOB real orders) | `EXECUTION_MODE=paper` (Simulated taker) |
 | **Bot Status** | **`PAUSED`** (Awaiting deposit to activate) | **`RUNNING`** (Continuous benchmark) |
-| **Ledger Database** | `/data/live_ledger.db` (Clean, $11 seed) | `/data/paper_ledger.db` (Migrated, **$38.00+** equity) |
+| **Ledger Database** | `/data/live_ledger.db` (Real-Time Live Balance: **$0.03** synced) | `/data/paper_ledger.db` (Migrated benchmark equity) |
 | **Polygon Funder Address** | `0x5923CFc24AA6f876f27bc9257890126a8c3E72B6` | Local virtual balance |
 | **Polygon Signer Address** | `0x284f018FfF5B0Ec392440693eB30d13ae5f2604F` | N/A |
 | **Signature Type** | `POLY_SIG_TYPE=2` (Proxy/Gnosis Safe) | N/A |
