@@ -135,6 +135,18 @@ body {
 }
 .mode-paper .status-dot { background-color: var(--color-blue); }
 
+.mode-live {
+  background-color: rgba(16, 185, 129, 0.15);
+  color: #059669;
+  border-color: rgba(16, 185, 129, 0.35);
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+.mode-live .status-dot {
+  background-color: #10b981;
+  box-shadow: 0 0 6px #10b981;
+}
+
 .status-running {
   background-color: var(--color-green-bg);
   color: var(--color-green);

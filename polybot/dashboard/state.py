@@ -17,6 +17,7 @@ class DashboardState:
 
     def __init__(self):
         self.bot_status: str = "INITIALIZING"  # RUNNING, PAUSED, STOPPED, DISCONNECTED
+        self.execution_mode: str = "paper"  # paper, live
         self.strategy_name: str = "reversal"
 
         # Market & clock
@@ -188,6 +189,7 @@ class DashboardState:
 
         return {
             "bot_status": self.bot_status,
+            "execution_mode": self.execution_mode,
             "strategy_name": self.strategy_name,
             "current_slug": self.current_slug,
             "window_start": self.window_start,

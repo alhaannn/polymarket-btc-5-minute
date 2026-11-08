@@ -262,6 +262,27 @@ function renderState(state) {
     renderSchedule(state.schedule);
   }
 
+  // 0.5 Execution Mode (Paper vs Live)
+  const modePill = document.getElementById('pill-paper-mode');
+  if (modePill) {
+    if (state.execution_mode === 'live') {
+      modePill.className = 'status-pill mode-live';
+      modePill.innerHTML = '<span class="status-dot"></span> LIVE TRADING';
+      modePill.title = 'Live real-money trading mode on Polymarket CLOB.';
+      if (document.title.includes('Paper')) {
+        document.title = document.title.replace('Paper', 'Live');
+      }
+      const titleEl = document.querySelector('.brand-title');
+      if (titleEl && !titleEl.textContent.includes('Live')) {
+        titleEl.textContent = 'Polymarket 5-Minute Live Trading Workstation';
+      }
+    } else {
+      modePill.className = 'status-pill mode-paper';
+      modePill.innerHTML = '<span class="status-dot"></span> PAPER SIMULATION';
+      modePill.title = 'Paper trading mode only. No live keys or real orders.';
+    }
+  }
+
   // 1. Bot status & pill
   const botPill = document.getElementById('pill-bot-status');
   const botText = document.getElementById('text-bot-status');
@@ -596,9 +617,10 @@ function renderTradesTable(trades) {
   const pageItems = allTrades.slice(start, start + PAGE_SIZE);
 
   if (total === 0) {
+    const isLive = document.getElementById('pill-paper-mode')?.classList.contains('mode-live');
     tbody.innerHTML = `
       <tr class="table-row-empty">
-        <td colspan="13">No paper trades recorded yet in this session.</td>
+        <td colspan="13">${isLive ? 'No live trades recorded yet in this session.' : 'No paper trades recorded yet in this session.'}</td>
       </tr>
     `;
   } else {

@@ -61,7 +61,7 @@ async def run_recorder(config: PolybotConfig) -> None:
         await recorder.stop()
         log.info("Recorder shut down complete.")
 
-async def run_paper(config: PolybotConfig, demo: bool = False, reset: bool = False) -> None:
+async def run_paper(config: PolybotConfig, demo: bool = False, reset: bool = False, paused: bool = False) -> None:
     import math
     from polybot.tz import ist_today_str
     from polybot.dashboard.server import DashboardServer
@@ -81,9 +81,15 @@ async def run_paper(config: PolybotConfig, demo: bool = False, reset: bool = Fal
     from polybot.strategy import EdgeStrategy, LegacyStrategy, ReversalStrategy
 
     sizing_mode = os.getenv("SIZING_MODE", "canonical")
+    exec_mode = os.getenv("EXECUTION_MODE", "paper").lower()
+    is_live = exec_mode == "live"
+    db_name = "live_ledger.db" if is_live else "paper_ledger.db"
+    mode_label = "LIVE TRADING" if is_live else "PAPER MODE"
+
+    starting_equity_usd = float(os.getenv("STARTING_EQUITY_USD", "11.0"))
     capital_mgr = CapitalManager(
-        db_path=config.recorder.data_dir / "paper_ledger.db",
-        starting_equity_usd=11.0,
+        db_path=config.recorder.data_dir / db_name,
+        starting_equity_usd=starting_equity_usd,
         sizing_mode=sizing_mode,
     )
     budget_calc = DynamicTradeBudgetCalculator(
@@ -92,25 +98,32 @@ async def run_paper(config: PolybotConfig, demo: bool = False, reset: bool = Fal
         sizing_mode=sizing_mode,
     )
 
-    ledger = TradeLedger(config.recorder.data_dir / "paper_ledger.db")
+    ledger = TradeLedger(config.recorder.data_dir / db_name)
 
     dash_state = DashboardState()
-    dash_state.set_bot_status("RUNNING")
+    dash_state.execution_mode = exec_mode
+    is_paused = paused or (os.getenv("PAUSED", "false").lower() in ("true", "1", "yes"))
+    if is_paused:
+        dash_state.set_bot_status("PAUSED")
+    else:
+        dash_state.set_bot_status("RUNNING")
     dash_state.strategy_name = config.strategy.strategy_name
     dash_state.prime_hours_only = getattr(config.strategy, "prime_hours_only", True)
 
     if reset:
-        log.info("Reset requested: wiping trade log and reinitializing capital ledger at $11.00 starting equity")
+        log.info("Reset requested: wiping trade log and reinitializing capital ledger at $%.2f starting equity", starting_equity_usd)
         ledger.clear_all_trades()
-        capital_mgr.reset(starting_equity_usd=11.0)
-        dash_state.add_log("CONTROL", "Reset complete: cleared historical trade log, starting equity set to $11.00 (PnL $0.00)")
+        capital_mgr.reset(starting_equity_usd=starting_equity_usd)
+        dash_state.add_log("CONTROL", f"Reset complete: cleared historical trade log, starting equity set to ${starting_equity_usd:.2f} (PnL $0.00)")
 
     log.info(
-        "PAPER MODE ACTIVE | strategy=%s initial_stake=$%.2f reversal_stake=$%.2f latency=%dms demo=%s",
+        "%s ACTIVE | strategy=%s initial_stake=$%.2f reversal_stake=$%.2f latency=%dms paused=%s demo=%s",
+        mode_label,
         config.strategy.strategy_name,
         config.strategy.initial_stake_usd,
         config.strategy.reversal_stake_usd,
         config.strategy.latency_ms,
+        is_paused,
         demo,
     )
 
@@ -199,7 +212,7 @@ async def run_paper(config: PolybotConfig, demo: bool = False, reset: bool = Fal
     current_tokens: Optional[Dict[str, str]] = None
     last_discovery_attempt_ts = 0.0
     open_trades_to_settle: List[Dict[str, Any]] = []
-    is_paused = False
+    # is_paused already determined above from config/args/env
     last_rest_poll_ts = 0.0
 
     def handle_order_rejected(rej_order: Order, reason: str):
@@ -217,7 +230,11 @@ async def run_paper(config: PolybotConfig, demo: bool = False, reset: bool = Fal
 
     engine.on_order_rejected = handle_order_rejected
 
-    dash_state.add_log("INFO", f"Bot initialized with {config.strategy.strategy_name} strategy")
+    if is_paused:
+        dash_state.add_log("CONTROL", f"{mode_label} initialized in PAUSED state (awaiting wallet funding)")
+        log.info("%s initialized in PAUSED state (awaiting wallet funding)", mode_label)
+    else:
+        dash_state.add_log("INFO", f"Bot initialized with {config.strategy.strategy_name} strategy")
 
     try:
         while True:
@@ -226,14 +243,17 @@ async def run_paper(config: PolybotConfig, demo: bool = False, reset: bool = Fal
             if action == "PAUSE":
                 is_paused = True
                 dash_state.set_bot_status("PAUSED")
-                log.info("Paper trading PAUSED via dashboard control")
+                dash_state.add_log("CONTROL", f"{mode_label} PAUSED via dashboard control")
+                log.info("%s PAUSED via dashboard control", mode_label)
             elif action in ("RESUME", "START"):
                 is_paused = False
                 dash_state.set_bot_status("RUNNING")
-                log.info("Paper trading RESUMED via dashboard control")
+                dash_state.add_log("CONTROL", f"{mode_label} RESUMED via dashboard control")
+                log.info("%s RESUMED via dashboard control", mode_label)
             elif action == "STOP":
                 dash_state.set_bot_status("STOPPED")
-                log.info("Paper trading STOPPED via dashboard control")
+                dash_state.add_log("CONTROL", f"{mode_label} STOPPED via dashboard control")
+                log.info("%s STOPPED via dashboard control", mode_label)
                 break
 
             if risk.is_kill_switch_active():
@@ -727,7 +747,8 @@ def main() -> None:
     paper_parser.add_argument("--host", type=str, default=None, help="Dashboard host (e.g. 0.0.0.0 for VPS access)")
     paper_parser.add_argument("--no-dashboard", action="store_true", help="Run headless without dashboard server")
     paper_parser.add_argument("--demo", action="store_true", help="Simulate 5m market price & probability swings to test UI and strategy")
-    paper_parser.add_argument("--reset", action="store_true", help="Reset all trades and capital state to $11.00 starting balance")
+    paper_parser.add_argument("--reset", action="store_true", help="Reset all trades and capital state to starting balance")
+    paper_parser.add_argument("--paused", action="store_true", help="Start bot in paused state awaiting manual resume")
 
     # Dashboard standalone command
     dash_parser = subparsers.add_parser("dashboard", help="Run local web dashboard standalone")
@@ -766,7 +787,14 @@ def main() -> None:
         if args.no_dashboard:
             config.dashboard.enabled = False
         try:
-            asyncio.run(run_paper(config, demo=getattr(args, "demo", False), reset=getattr(args, "reset", False)))
+            asyncio.run(
+                run_paper(
+                    config,
+                    demo=getattr(args, "demo", False),
+                    reset=getattr(args, "reset", False),
+                    paused=getattr(args, "paused", False),
+                )
+            )
         except KeyboardInterrupt:
             log.info("Stopped by user.")
     elif args.command == "dashboard":
