@@ -85,6 +85,125 @@
       </div>
     </section>
 
+    <!-- Multi-Market Fleet & Self-Healing Reviver Banner -->
+    <section class="card mm-fleet-banner-card" id="card-mm-fleet-banner">
+      <div class="card-header" style="border-bottom: 1px solid var(--border-light); padding-bottom: 10px; margin-bottom: 12px;">
+        <div class="header-left">
+          <span class="card-tag">6-MARKET CITADEL</span>
+          <h2 class="card-title">Multi-Market Fleet &amp; Autonomous Reviver Engine</h2>
+        </div>
+        <div class="header-right" style="display: flex; gap: 8px; align-items: center;">
+          <span class="status-pill status-running" id="pill-fleet-arbiter">ARBITER: 0/1 SLOTS (STANDBY)</span>
+          <span class="status-pill mode-paper" id="pill-fleet-active">6/6 ACTIVE</span>
+          <span class="status-pill status-cold" id="pill-fleet-swept">SWEPT: $0.00 USDC</span>
+        </div>
+      </div>
+
+      <div class="metrics-summary-grid" style="grid-template-columns: repeat(4, 1fr); margin-bottom: 12px;">
+        <div class="metric-card pnl-card">
+          <div class="metric-label">Total Fleet Equity</div>
+          <div class="metric-large text-green" id="val-fleet-total">$72.00</div>
+          <div class="metric-sublabel" id="val-fleet-total-sub">6 Isolated Cells ($12 Base)</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Cold Cash Swept (Binance)</div>
+          <div class="metric-large text-gold" id="val-fleet-swept">$0.00</div>
+          <div class="metric-sublabel" id="val-fleet-swept-sub">Polygon POS (Locked Profit)</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Fleet Health</div>
+          <div class="metric-large text-green" id="val-fleet-status">6/6 HEALTHY</div>
+          <div class="metric-sublabel" id="val-fleet-status-sub">Halted Cells: 0 (Bulkhead Ready)</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Next Harvest Radar</div>
+          <div class="metric-large" id="val-radar-leader" style="font-size: 16px; padding-top: 4px;">BTC: $12.00</div>
+          <div class="metric-sublabel" id="val-radar-desc">$88.00 to $100 Sweep</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 6-Market Matrix Grid Section -->
+    <section class="card mm-grid-section" id="section-mm-grid">
+      <div class="card-header" style="border-bottom: 1px solid var(--border-light); padding-bottom: 10px; margin-bottom: 14px;">
+        <div class="header-left">
+          <span class="card-tag">PARALLEL EXECUTION</span>
+          <h2 class="card-title">6-Market Live Probability Matrix (5-Minute Windows)</h2>
+        </div>
+        <div class="strategy-rule-info">
+          Snipe Zone: <span class="rule-highlight">89%–91% (180s–210s)</span> &bull; Reviver: <span class="rule-highlight">$12 to Halted on $100 Win</span>
+        </div>
+      </div>
+
+      <div class="mm-matrix-grid" id="container-mm-matrix-grid">
+        <!-- 6 cards rendered dynamically by app.js -->
+      </div>
+    </section>
+
+    <!-- Per-Asset Performance Ledger -->
+    <section class="card mm-asset-ledger-card" id="card-mm-asset-ledger">
+      <div class="card-header" style="border-bottom: 1px solid var(--border-light); padding-bottom: 10px; margin-bottom: 10px;">
+        <div class="header-left">
+          <span class="card-tag">PER-ASSET BREAKDOWN</span>
+          <h2 class="card-title">Per-Asset Performance &amp; Cell Capital Ledger</h2>
+        </div>
+      </div>
+      <div class="table-container">
+        <table class="data-table" id="table-asset-ledger">
+          <thead>
+            <tr>
+              <th>Asset</th>
+              <th>Cell Capital</th>
+              <th>Derived Stake</th>
+              <th>Trades</th>
+              <th>W / L</th>
+              <th>Win Rate</th>
+              <th>Gross Profit</th>
+              <th>Gross Loss</th>
+              <th>Net PnL</th>
+              <th>Progress to $100</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-asset-ledger">
+            <!-- Dynamically populated -->
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Binance Cold Storage Sweeper Ledger -->
+    <section class="card mm-sweeper-ledger-card" id="card-mm-sweeper-ledger">
+      <div class="card-header" style="border-bottom: 1px solid var(--border-light); padding-bottom: 10px; margin-bottom: 10px;">
+        <div class="header-left">
+          <span class="card-tag">COLD STORAGE DIVIDENDS</span>
+          <h2 class="card-title">🏦 Binance Cold Storage Sweeper Ledger (Polygon POS USDC)</h2>
+        </div>
+        <div class="header-right">
+          <span class="status-pill status-cold" id="val-sweeper-address">DESTINATION: BINANCE POLYGON USDC</span>
+        </div>
+      </div>
+      <div class="table-container">
+        <table class="data-table" id="table-sweeper-ledger">
+          <thead>
+            <tr>
+              <th>Timestamp (IST)</th>
+              <th>Winning Asset</th>
+              <th>Milestone Achieved</th>
+              <th>Halted Revived</th>
+              <th>Amount Swept to Binance</th>
+              <th>Polygon POS Status</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-sweeper-ledger">
+            <tr>
+              <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 16px;">No cold sweeps recorded yet in current cycle. Sweeps trigger automatically as assets cross $100.00.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
     <!-- Row 1: Market Session Clock & Countdown -->
     <section class="card market-session-card" id="card-market-session">
       <div class="card-header">

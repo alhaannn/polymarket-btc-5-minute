@@ -291,6 +291,13 @@ def create_dashboard_app(
         except Exception as e:
             return secure_response(JSONResponse({"status": "error", "message": str(e)}, status_code=400))
 
+    async def get_multi_market(request: Request) -> Response:
+        auth_err = check_auth(request)
+        if auth_err:
+            return auth_err
+        mm_state = getattr(state, "multi_market", None) or {}
+        return secure_response(JSONResponse(mm_state))
+
     routes = [
         Route("/", endpoint=get_index, methods=["GET"]),
         Route("/dashboard", endpoint=get_index, methods=["GET"]),
@@ -299,6 +306,7 @@ def create_dashboard_app(
         Route("/api/auth/logout", endpoint=post_auth_logout, methods=["POST"]),
         Route("/api/auth/me", endpoint=get_auth_me, methods=["GET"]),
         Route("/api/state", endpoint=get_state, methods=["GET"]),
+        Route("/api/multi_market", endpoint=get_multi_market, methods=["GET"]),
         Route("/api/performance", endpoint=get_performance, methods=["GET"]),
         Route("/api/trades", endpoint=get_trades, methods=["GET"]),
         Route("/api/logs", endpoint=get_logs, methods=["GET"]),

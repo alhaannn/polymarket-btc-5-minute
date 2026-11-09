@@ -89,6 +89,9 @@ class DashboardState:
             "reconciliation_blocked": False,
         }
 
+        # Multi-Market 6-Asset Architecture State
+        self.multi_market: Optional[Dict[str, Any]] = None
+
         # Control signals requested from UI
         self.requested_action: Optional[str] = None
 
@@ -172,6 +175,9 @@ class DashboardState:
     def update_schedule_state(self, sched_dict: Dict[str, Any]) -> None:
         self.schedule_state = sched_dict
 
+    def update_multi_market(self, matrix_dict: Dict[str, Any]) -> None:
+        self.multi_market = matrix_dict
+
     def to_dict(self) -> Dict[str, Any]:
         """Snapshot of current system state for API/UI."""
         now = time.time()
@@ -211,6 +217,7 @@ class DashboardState:
             "staleness_sec": staleness,
             "latency_ms": round(self.last_latency_ms, 1),
             "capital": self.capital_state,
+            "multi_market": self.multi_market,
             "schedule": sched,
             "server_time": now,
             "server_time_str": ist_datetime_str(now),

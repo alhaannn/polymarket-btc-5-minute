@@ -15,6 +15,9 @@ from urllib3.util import Retry
 log = logging.getLogger("polybot.gamma")
 
 
+SUPPORTED_5M_ASSETS = ["btc", "eth", "sol", "doge", "xrp", "bnb"]
+
+
 class PolymarketClient:
     """HTTP client for Gamma API and CLOB REST with exponential backoff retries."""
 
@@ -66,10 +69,11 @@ class PolymarketClient:
         except Exception:
             return None
 
-    def get_market(self, window_start: int) -> Optional[Dict[str, Any]]:
+    def get_market(self, window_start: int, asset: str = "btc") -> Optional[Dict[str, Any]]:
         """
-        Return standard market info:
+        Return standard market info for a given 5m asset:
         {
+            'asset': 'btc',
             'slug': 'btc-updown-5m-...',
             'start': window_start,
             'end': window_start + 300,
@@ -78,7 +82,8 @@ class PolymarketClient:
             'question': ...
         }
         """
-        slug = f"btc-updown-5m-{window_start}"
+        asset_clean = asset.lower().strip()
+        slug = f"{asset_clean}-updown-5m-{window_start}"
         ev = self.get_event(slug)
         if not ev or not ev.get("markets"):
             return None
@@ -95,6 +100,7 @@ class PolymarketClient:
 
         tokens_map = dict(zip(outcomes, tokens))
         return {
+            "asset": asset_clean,
             "slug": slug,
             "start": window_start,
             "end": window_start + 300,
@@ -103,6 +109,23 @@ class PolymarketClient:
             "question": m.get("question"),
             "description": m.get("description"),
         }
+
+    def get_multi_markets(
+        self,
+        window_start: int,
+        assets: Optional[List[str]] = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Resolves standard market info for all 6 (or specified) assets concurrently.
+        Returns: { 'btc': market_dict, 'eth': market_dict, ... }
+        """
+        target_assets = [a.lower().strip() for a in (assets or SUPPORTED_5M_ASSETS)]
+        results: Dict[str, Dict[str, Any]] = {}
+        for a in target_assets:
+            m = self.get_market(window_start, asset=a)
+            if m:
+                results[a] = m
+        return results
 
     def get_orderbook(self, token_id: str) -> Dict[str, List[Tuple[float, float]]]:
         """

@@ -569,6 +569,217 @@ function renderState(state) {
   if (state.capital) {
     renderCapital(state.capital);
   }
+
+  // 8. Multi-Market Fleet & Grid Rendering
+  if (state.multi_market) {
+    renderMultiMarket(state.multi_market);
+  }
+}
+
+function renderMultiMarket(mm) {
+  if (!mm) return;
+
+  // 1. Fleet Banner Metrics
+  const fleetTotalEl = document.getElementById('val-fleet-total');
+  if (fleetTotalEl && mm.fleet_equity_usd !== undefined) {
+    fleetTotalEl.textContent = `$${mm.fleet_equity_usd.toFixed(2)}`;
+  }
+
+  const fleetSweptEl = document.getElementById('val-fleet-swept');
+  const pillSwept = document.getElementById('pill-fleet-swept');
+  if (fleetSweptEl && mm.total_swept_usd !== undefined) {
+    fleetSweptEl.textContent = `$${mm.total_swept_usd.toFixed(2)}`;
+    if (pillSwept) pillSwept.textContent = `SWEPT: $${mm.total_swept_usd.toFixed(2)} USDC`;
+  }
+
+  const fleetStatusEl = document.getElementById('val-fleet-status');
+  const fleetStatusSub = document.getElementById('val-fleet-status-sub');
+  const pillActive = document.getElementById('pill-fleet-active');
+  if (fleetStatusEl) {
+    const act = mm.active_cells_count !== undefined ? mm.active_cells_count : 6;
+    const hlt = mm.halted_cells_count || 0;
+    fleetStatusEl.textContent = `${act}/6 HEALTHY`;
+    if (fleetStatusSub) fleetStatusSub.textContent = `Halted Cells: ${hlt} (Bulkhead Ready)`;
+    if (pillActive) pillActive.textContent = `${act}/6 ACTIVE`;
+  }
+
+  const pillArbiter = document.getElementById('pill-fleet-arbiter');
+  if (pillArbiter && mm.arbiter) {
+    pillArbiter.textContent = `ARBITER: ${mm.arbiter.status_text || '0/1 SLOTS (STANDBY)'}`;
+  }
+
+  // Radar
+  const radar = mm.next_harvest_radar;
+  if (radar) {
+    const rLeader = document.getElementById('val-radar-leader');
+    const rDesc = document.getElementById('val-radar-desc');
+    if (rLeader) {
+      rLeader.textContent = `${radar.leader_asset || 'NONE'}: $${(radar.leader_equity || 0).toFixed(2)}`;
+    }
+    if (rDesc) {
+      rDesc.textContent = `$${(radar.distance_to_milestone || 0).toFixed(2)} to $100 Sweep (Est: +$${(radar.est_sweep_amount_usd || 0).toFixed(2)})`;
+    }
+  }
+
+  // 2. Render 6 Asset Cards
+  const gridContainer = document.getElementById('container-mm-matrix-grid');
+  if (gridContainer && mm.matrix) {
+    const order = ['btc', 'eth', 'sol', 'doge', 'xrp', 'bnb'];
+    const cardsHtml = order.map(assetKey => {
+      const item = mm.matrix[assetKey] || {};
+      const assetUpper = (item.asset || assetKey).toUpperCase();
+      const strikeStr = item.strike_k ? `$${Number(item.strike_k).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 4})}` : '--';
+      const spotStr = item.spot_p ? `$${Number(item.spot_p).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 4})}` : '--';
+      const diffVal = item.diff || 0.0;
+      const diffStr = diffVal >= 0 ? `+${diffVal.toFixed(2)}` : diffVal.toFixed(2);
+      const diffColor = diffVal >= 0 ? 'var(--color-green)' : 'var(--color-red)';
+
+      const upProb = item.up_prob !== undefined ? item.up_prob : 50.0;
+      const downProb = item.down_prob !== undefined ? item.down_prob : 50.0;
+
+      const cellCap = item.cell_equity !== undefined ? item.cell_equity : 12.0;
+      const progPct = item.progress_pct !== undefined ? item.progress_pct : ((cellCap / 100) * 100).toFixed(1);
+      const initStake = item.initial_budget || 1;
+      const revStake = item.reversal_budget || 11;
+
+      const status = item.cell_status || 'ACTIVE';
+      let cardClass = 'mm-asset-card card-active';
+      let badgeClass = 'mm-card-badge badge-active';
+      let badgeText = 'ACTIVE';
+
+      if (status === 'HALTED_DEPLETED') {
+        cardClass = 'mm-asset-card card-halted';
+        badgeClass = 'mm-card-badge badge-halted';
+        badgeText = 'HALTED (AWAITING REVIVER)';
+      } else if (status === 'TRIGGER_ZONE') {
+        cardClass = 'mm-asset-card card-trigger';
+        badgeClass = 'mm-card-badge badge-trigger';
+        badgeText = 'TRIGGER ZONE (89-91%)';
+      } else if (status === 'POSITION_ACTIVE') {
+        cardClass = 'mm-asset-card card-position';
+        badgeClass = 'mm-card-badge badge-position';
+        badgeText = `POSITION ACTIVE ($${initStake})`;
+      } else if (status === 'REVERSAL_ACTIVE') {
+        cardClass = 'mm-asset-card card-position';
+        badgeClass = 'mm-card-badge badge-reversal';
+        badgeText = `REVERSAL HEDGE ($${revStake})`;
+      } else if (status === 'TARGET_GRADUATED') {
+        cardClass = 'mm-asset-card card-graduated';
+        badgeClass = 'mm-card-badge badge-graduated';
+        badgeText = 'GRADUATING ($100)';
+      }
+
+      return `
+        <div class="${cardClass}" id="card-asset-${assetKey}">
+          <div class="mm-card-header">
+            <div class="mm-card-title-group">
+              <span class="mm-card-symbol">${assetUpper}/USD</span>
+              <span style="font-size: 11px; color: var(--text-muted); font-family: var(--font-mono);">5M</span>
+            </div>
+            <span class="${badgeClass}">${badgeText}</span>
+          </div>
+
+          <div class="mm-card-prices">
+            <div>Strike (K): <span class="mm-price-val">${strikeStr}</span></div>
+            <div>Spot (Pt): <span class="mm-price-val">${spotStr}</span> (<span style="color: ${diffColor}; font-weight: 600;">${diffStr}</span>)</div>
+          </div>
+
+          <div class="mm-prob-container">
+            <div class="mm-prob-labels">
+              <span style="color: var(--color-green);">UP: ${upProb.toFixed(1)}%</span>
+              <span style="color: var(--color-red);">DOWN: ${downProb.toFixed(1)}%</span>
+            </div>
+            <div class="mm-prob-track">
+              <div class="mm-prob-fill" style="width: ${Math.min(100, Math.max(0, upProb))}%;"></div>
+            </div>
+          </div>
+
+          <div class="mm-card-financials">
+            <div>
+              <div class="mm-fin-capital">$${Number(cellCap).toFixed(2)}</div>
+              <div class="mm-fin-progress">Progress: ${progPct}% to $100</div>
+            </div>
+            <div style="text-align: right;">
+              <div class="mm-fin-stake">$${initStake} Init / $${revStake} Rev</div>
+              <div style="font-size: 10px; color: var(--text-muted); font-family: var(--font-mono);">${item.wins || 0}W - ${item.losses || 0}L</div>
+            </div>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    gridContainer.innerHTML = cardsHtml;
+  }
+
+  // 3. Render Per-Asset Table
+  const tbodyAsset = document.getElementById('tbody-asset-ledger');
+  if (tbodyAsset && mm.matrix) {
+    const order = ['btc', 'eth', 'sol', 'doge', 'xrp', 'bnb'];
+    const rowsHtml = order.map(assetKey => {
+      const item = mm.matrix[assetKey] || {};
+      const assetUpper = (item.asset || assetKey).toUpperCase();
+      const cap = Number(item.cell_equity !== undefined ? item.cell_equity : 12.0).toFixed(2);
+      const initStake = item.initial_budget || 1;
+      const revStake = item.reversal_budget || 11;
+      const trades = item.trades || 0;
+      const wins = item.wins || 0;
+      const losses = item.losses || 0;
+      const winRate = item.win_rate !== undefined ? `${item.win_rate.toFixed(1)}%` : '--';
+      const grossP = Number(item.gross_profit || 0).toFixed(2);
+      const grossL = Number(item.gross_loss || 0).toFixed(2);
+      const netPnL = Number(item.net_pnl || 0).toFixed(2);
+      const pnlColor = Number(netPnL) >= 0 ? 'var(--color-green)' : 'var(--color-red)';
+      const prog = item.progress_pct !== undefined ? `${item.progress_pct}%` : `${((Number(cap)/100)*100).toFixed(1)}%`;
+      const status = item.cell_status || 'ACTIVE';
+
+      return `
+        <tr>
+          <td><strong>${assetUpper}</strong></td>
+          <td style="font-family: var(--font-mono); font-weight: 600;">$${cap}</td>
+          <td style="font-family: var(--font-mono);">$${initStake} / $${revStake}</td>
+          <td>${trades}</td>
+          <td>${wins} / ${losses}</td>
+          <td style="font-weight: 600;">${winRate}</td>
+          <td style="color: var(--color-green);">+$${grossP}</td>
+          <td style="color: var(--color-red);">-$${grossL}</td>
+          <td style="color: ${pnlColor}; font-weight: 700;">${Number(netPnL) >= 0 ? '+' : ''}$${netPnL}</td>
+          <td>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <div style="flex: 1; height: 6px; background: var(--border-light); border-radius: 3px; overflow: hidden;">
+                <div style="width: ${prog}; height: 100%; background: #10b981;"></div>
+              </div>
+              <span style="font-size: 11px; font-family: var(--font-mono);">${prog}</span>
+            </div>
+          </td>
+          <td><span class="mm-card-badge ${status === 'HALTED_DEPLETED' ? 'badge-halted' : 'badge-active'}">${status}</span></td>
+        </tr>
+      `;
+    }).join('');
+
+    tbodyAsset.innerHTML = rowsHtml;
+  }
+
+  // 4. Render Binance Sweeper Ledger
+  const tbodySweeper = document.getElementById('tbody-sweeper-ledger');
+  if (tbodySweeper) {
+    const harvests = mm.recent_harvests || [];
+    if (harvests.length > 0) {
+      tbodySweeper.innerHTML = harvests.map(h => {
+        const timeStr = h.timestamp_ts ? formatISTDateTime(h.timestamp_ts) : '--';
+        const revivedStr = h.halted_revived_assets && h.halted_revived_assets.length > 0 ? h.halted_revived_assets.join(', ') : 'None (0 Halted)';
+        return `
+          <tr>
+            <td style="font-family: var(--font-mono);">${timeStr}</td>
+            <td><strong>${h.winning_asset}</strong></td>
+            <td><span class="status-pill mode-paper">$100.00 MILESTONE</span></td>
+            <td>${revivedStr}</td>
+            <td style="font-family: var(--font-mono); font-weight: 700; color: #d97706;">+$${Number(h.sweep_amount_usd).toFixed(2)} USDC</td>
+            <td><span class="status-pill feed-live">CONFIRMED (POLYGON POS)</span></td>
+          </tr>
+        `;
+      }).join('');
+    }
+  }
 }
 
 function getTagClass(level) {

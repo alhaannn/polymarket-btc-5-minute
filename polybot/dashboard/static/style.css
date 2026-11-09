@@ -1525,3 +1525,223 @@ body {
   background: #059669;
 }
 
+/* ==========================================================================
+   Multi-Market 6-Asset Grid & Command Center Styles
+   ========================================================================== */
+
+.text-gold {
+  color: #d97706 !important;
+}
+
+.status-cold {
+  background-color: #fef3c7 !important;
+  color: #b45309 !important;
+  border: 1px solid #fde68a !important;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.mm-fleet-banner-card {
+  background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+  border: 1px solid var(--border-light);
+  border-left: 4px solid #10b981;
+}
+
+.mm-matrix-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+@media (max-width: 1200px) {
+  .mm-matrix-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  .mm-matrix-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.mm-asset-card {
+  background: #ffffff;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.mm-asset-card:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+.mm-asset-card.card-active {
+  border-top: 3px solid #10b981;
+}
+
+.mm-asset-card.card-trigger {
+  border-top: 3px solid #f59e0b;
+  background: #fffdfa;
+  animation: pulse-trigger 2s infinite;
+}
+
+.mm-asset-card.card-position {
+  border-top: 3px solid #8b5cf6;
+  background: #fdfcff;
+}
+
+.mm-asset-card.card-halted {
+  border-top: 3px solid #ef4444;
+  background: #fff5f5;
+  opacity: 0.85;
+}
+
+.mm-asset-card.card-graduated {
+  border-top: 3px solid #f59e0b;
+  background: #fffbeb;
+}
+
+.mm-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.mm-card-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mm-card-symbol {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.mm-card-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  text-transform: uppercase;
+}
+
+.badge-active {
+  background: #ecfdf5;
+  color: #059669;
+  border: 1px solid #a7f3d0;
+}
+
+.badge-trigger {
+  background: #fef3c7;
+  color: #b45309;
+  border: 1px solid #fde68a;
+}
+
+.badge-position {
+  background: #ede9fe;
+  color: #6d28d9;
+  border: 1px solid #ddd6fe;
+}
+
+.badge-reversal {
+  background: #ffedd5;
+  color: #c2410c;
+  border: 1px solid #fed7aa;
+}
+
+.badge-halted {
+  background: #fee2e2;
+  color: #b91c1c;
+  border: 1px solid #fca5a5;
+}
+
+.badge-graduated {
+  background: #fef3c7;
+  color: #b45309;
+  border: 1px solid #fcd34d;
+}
+
+.mm-card-prices {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-subtle);
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+}
+
+.mm-price-val {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.mm-prob-container {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mm-prob-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.mm-prob-track {
+  height: 8px;
+  background: #fee2e2;
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+}
+
+.mm-prob-fill {
+  height: 100%;
+  background: #10b981;
+  transition: width 0.3s ease;
+}
+
+.mm-card-financials {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border-light);
+  font-size: 11px;
+}
+
+.mm-fin-capital {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.mm-fin-progress {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.mm-fin-stake {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: #2563eb;
+}
+

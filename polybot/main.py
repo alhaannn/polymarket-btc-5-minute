@@ -224,6 +224,10 @@ async def run_paper(
     else:
         strat = EdgeStrategy(config.strategy)
 
+    from polybot.multi_market import MultiMarketOrchestrator
+    multi_orch = MultiMarketOrchestrator()
+    dash_state.update_multi_market(multi_orch.get_matrix_snapshot())
+
     rtds = None
     binance = None
     clob = CLOBOrderBookFeed(ws_url=config.feeds.clob_ws_url, rest_client=client)
@@ -238,9 +242,16 @@ async def run_paper(
             ping_interval_sec=config.feeds.rtds_ping_interval_sec,
             on_tick=lambda t: health.record_tick("chainlink", t["price"], t["timestamp_ms"]),
         )
+
+        def handle_binance_multiplex_tick(t: Dict[str, Any]):
+            asset = t.get("asset", "btc")
+            if asset == "btc":
+                health.record_tick("binance", t["price"], t["timestamp_ms"])
+            multi_orch.on_tick(t)
+
         binance = BinanceFeed(
-            ws_url=config.feeds.binance_ws_url,
-            on_tick=lambda t: health.record_tick("binance", t["price"], t["timestamp_ms"]),
+            symbols=["btcusdt", "ethusdt", "solusdt", "dogeusdt", "xrpusdt", "bnbusdt"],
+            on_tick=handle_binance_multiplex_tick,
         )
         await rtds.start()
         await binance.start()
@@ -416,6 +427,46 @@ async def run_paper(
                     [{"price": round(down_p, 3), "size": 500}]
                 )
 
+                # Update 6-Market Matrix Tracker in Demo Mode
+                multi_orch.trackers["btc"].strike_k = base_k
+                multi_orch.trackers["btc"].update_spot_price(cur_btc)
+                multi_orch.trackers["btc"].update_probabilities(up_p * 100.0, down_p * 100.0)
+
+                # ETH (5m)
+                multi_orch.trackers["eth"].strike_k = 2860.50
+                eth_spot = 2860.50 + 12.0 * math.sin((elapsed + 20) / 14.0)
+                eth_up = 52.0 + 38.0 * math.sin((elapsed + 15) / 22.0)
+                multi_orch.trackers["eth"].update_spot_price(eth_spot)
+                multi_orch.trackers["eth"].update_probabilities(max(5.0, min(95.0, eth_up)), 100.0 - max(5.0, min(95.0, eth_up)))
+
+                # SOL (5m)
+                multi_orch.trackers["sol"].strike_k = 194.80
+                sol_spot = 194.80 + 2.5 * math.sin((elapsed + 50) / 16.0)
+                sol_up = 48.0 + 30.0 * math.sin((elapsed + 60) / 25.0)
+                multi_orch.trackers["sol"].update_spot_price(sol_spot)
+                multi_orch.trackers["sol"].update_probabilities(max(5.0, min(95.0, sol_up)), 100.0 - max(5.0, min(95.0, sol_up)))
+
+                # DOGE (5m)
+                multi_orch.trackers["doge"].strike_k = 0.19820
+                doge_spot = 0.19820 + 0.002 * math.sin(elapsed / 18.0)
+                doge_up = 51.0 + 20.0 * math.sin(elapsed / 30.0)
+                multi_orch.trackers["doge"].update_spot_price(doge_spot)
+                multi_orch.trackers["doge"].update_probabilities(max(5.0, min(95.0, doge_up)), 100.0 - max(5.0, min(95.0, doge_up)))
+
+                # XRP (5m)
+                multi_orch.trackers["xrp"].strike_k = 0.58240
+                xrp_spot = 0.58240 + 0.007 * math.sin((elapsed + 45) / 16.0)
+                xrp_up = 49.0 + 25.0 * math.sin((elapsed + 10) / 20.0)
+                multi_orch.trackers["xrp"].update_spot_price(xrp_spot)
+                multi_orch.trackers["xrp"].update_probabilities(max(5.0, min(95.0, xrp_up)), 100.0 - max(5.0, min(95.0, xrp_up)))
+
+                # BNB (5m)
+                multi_orch.trackers["bnb"].strike_k = 618.40
+                bnb_spot = 618.40 + 3.5 * math.sin((elapsed + 80) / 15.0)
+                bnb_up = 50.0 + 15.0 * math.sin((elapsed + 35) / 28.0)
+                multi_orch.trackers["bnb"].update_spot_price(bnb_spot)
+                multi_orch.trackers["bnb"].update_probabilities(max(5.0, min(95.0, bnb_up)), 100.0 - max(5.0, min(95.0, bnb_up)))
+
             # Process pending latency fills (passing side_books mapping)
             new_fills = engine.process_pending_orders(now, clob.side_books)
             for f in new_fills:
@@ -500,6 +551,7 @@ async def run_paper(
                 down_bid=down_bid,
                 latency_ms=config.strategy.latency_ms,
             )
+            dash_state.update_multi_market(multi_orch.get_matrix_snapshot())
 
             # Check trigger range status for UI display
             if isinstance(strat, ReversalStrategy):
