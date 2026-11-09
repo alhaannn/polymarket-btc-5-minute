@@ -212,3 +212,18 @@ def test_live_order_minimum_floor_enforcement(tmp_path: Path):
     assert round(res_90.shares * res_90.price, 4) >= 1.00
 
 
+def test_clob_v2_order_builder_truncation_guard():
+    """Verify that the float epsilon prevents py_clob_client_v2 IEEE-754 floor truncation."""
+    try:
+        from py_clob_client_v2.order_builder.builder import ROUNDING_CONFIG, OrderBuilder
+    except ImportError:
+        return
+
+    b = OrderBuilder.__new__(OrderBuilder)
+    # Price 0.89: 1.13 shares should produce makerAmount >= $1.0057 (1005700) and not 0.9968 (996800)
+    side, maker_amt, taker_amt = b.get_order_amounts("BUY", 1.13 + 1e-6, 0.89, ROUNDING_CONFIG["0.01"])
+    assert maker_amt >= 1_000_000, f"maker_amt {maker_amt} fell below $1.00 minimum!"
+    assert taker_amt == 1_130_000, f"taker_amt {taker_amt} truncated below 1.13 shares!"
+
+
+

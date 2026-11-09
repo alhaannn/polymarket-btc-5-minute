@@ -256,7 +256,10 @@ class LiveExecutionEngine(ExecutionEngine):
             from py_clob_client.order_builder.constants import BUY, SELL
 
         side_str = BUY if order.action == "BUY" else SELL
-        size = round(order.usd_amount / order.price, 2)
+        if getattr(order, "shares", 0.0) > 0:
+            size = order.shares
+        else:
+            size = round(order.usd_amount / order.price, 2)
         if size <= 0:
             size = 1.0
 
@@ -269,6 +272,12 @@ class LiveExecutionEngine(ExecutionEngine):
                 size = math.ceil((1.00 / order.price) * 100.0) / 100.0
                 order.usd_amount = round(size * order.price, 4)
         order.shares = size
+
+        # py_clob_client_v2.order_builder uses round_down(size, 2) which does floor(size * 100) / 100.
+        # Due to IEEE-754 binary floating-point representation, numbers like 1.13 * 100 evaluate to 112.99999999999999,
+        # which floors to 112 (1.12 shares, causing Polymarket 400 rejection).
+        # Adding 1e-6 float epsilon prevents this under-floor truncation when building the order args.
+        clob_size = size + 1e-6
 
         # Pre-execution wallet balance check
         try:
@@ -285,32 +294,36 @@ class LiveExecutionEngine(ExecutionEngine):
 
         try:
             try:
-                from py_clob_client_v2.clob_types import OrderArgs
+                from py_clob_client_v2.clob_types import OrderArgs, OrderType
             except ImportError:
-                from py_clob_client.clob_types import OrderArgs
+                from py_clob_client.clob_types import OrderArgs, OrderType
 
             order_args = OrderArgs(
                 price=round(order.price, 3),
-                size=size,
+                size=clob_size,
                 side=side_str,
                 token_id=order.token_id,
             )
 
             log.info(
                 "[LIVE_ORDER_POSTING] Submitting to CLOB: side=%s token=%s price=%.3f size=%.2f ($%.2f)",
-                side_str, order.token_id, order.price, size, order.usd_amount
+                side_str, order.token_id, order.price, order.shares, order.usd_amount
             )
 
+            clob_order_type = OrderType.FAK if order.order_type == "taker" else OrderType.GTC
             try:
-                resp = self.clob_client.create_and_post_order(order_args)
+                resp = self.clob_client.create_and_post_order(order_args, order_type=clob_order_type)
             except TypeError:
-                resp = self.clob_client.create_and_post_order(
-                    token_id=order.token_id,
-                    price=round(order.price, 3),
-                    side=side_str,
-                    size=size,
-                    order_type=order.order_type,
-                )
+                try:
+                    resp = self.clob_client.create_and_post_order(order_args)
+                except TypeError:
+                    resp = self.clob_client.create_and_post_order(
+                        token_id=order.token_id,
+                        price=round(order.price, 3),
+                        side=side_str,
+                        size=size,
+                        order_type=order.order_type,
+                    )
             log.info("[LIVE_ORDER_RESPONSE] %s", resp)
 
             order_id = resp.get("orderID") or resp.get("order_id") if isinstance(resp, dict) else None
