@@ -7,6 +7,7 @@ const API_BASE = window.location.pathname.startsWith('/paper') ? '/paper' : '';
 
 let authConfig = { authenticated: false, auth_enabled: false, pin_required: false, username: '' };
 let pendingAction = null;
+let dashState = null;
 
 async function authFetch(url, options = {}) {
   const fullUrl = url.startsWith('/') ? `${API_BASE}${url}` : url;
@@ -138,6 +139,9 @@ async function fetchState() {
     if (!res.ok) throw new Error('State fetch failed');
     const data = await res.json();
     renderState(data);
+    if (data && data.capital) {
+      renderCapital(data.capital);
+    }
   } catch (err) {
     console.debug('State poll error:', err);
     setFeedStatusDisconnected();
@@ -292,6 +296,9 @@ function tickScheduleTimer() {
 }
 
 function renderState(state) {
+  if (!state) return;
+  dashState = state;
+
   // 0. Render Schedule (Working / Resting & Session PnL)
   if (state.schedule) {
     renderSchedule(state.schedule);
@@ -406,10 +413,11 @@ function renderState(state) {
   if (barLock) barLock.style.width = `${lockPct}%`;
 
   const elTime = document.getElementById('val-elapsed-time');
-  if (elTime) elTime.textContent = `${state.elapsed_sec.toFixed(1)}s`;
+  if (elTime) elTime.textContent = `${elapsed.toFixed(1)}s`;
 
+  const remaining = typeof state.remaining_sec === 'number' ? state.remaining_sec : Math.max(0.0, 300.0 - elapsed);
   const remTime = document.getElementById('val-remaining-time');
-  if (remTime) remTime.textContent = `${state.remaining_sec.toFixed(1)}s`;
+  if (remTime) remTime.textContent = `${remaining.toFixed(1)}s`;
 
   // Window Status Card with Exact Stage Context
   const winStatus = document.getElementById('val-window-status');
@@ -444,7 +452,8 @@ function renderState(state) {
 
   const freshEl = document.getElementById('val-data-freshness');
   if (freshEl) {
-    freshEl.textContent = state.staleness_sec < 1 ? '< 1s ago' : `${state.staleness_sec.toFixed(1)}s ago`;
+    const staleness = typeof state.staleness_sec === 'number' ? state.staleness_sec : 0.0;
+    freshEl.textContent = staleness < 1 ? '< 1s ago' : `${staleness.toFixed(1)}s ago`;
   }
 
   // 4. Outcome Probabilities
@@ -892,35 +901,39 @@ async function fetchCapital() {
 function renderCapital(cap) {
   if (!cap) return;
 
-  const isLive = (cap.execution_mode === 'live') || (dashState && dashState.execution_mode === 'live');
+  const isLive = (cap.execution_mode === 'live') || (typeof dashState !== 'undefined' && dashState && dashState.execution_mode === 'live');
+
+  const totEq = Number(cap.total_equity !== undefined ? cap.total_equity : (cap.total_equity_cents ? cap.total_equity_cents / 100.0 : 0)) || 0;
+  const actCap = Number(cap.active_capital !== undefined ? cap.active_capital : (cap.active_capital_cents ? cap.active_capital_cents / 100.0 : totEq)) || 0;
+  const protCap = Number(cap.protected_capital !== undefined ? cap.protected_capital : 0) || 0;
 
   const totalEl = document.getElementById('val-cap-total');
-  if (totalEl) totalEl.textContent = `$${(cap.total_equity || 0).toFixed(2)}`;
+  if (totalEl) totalEl.textContent = `$${totEq.toFixed(2)}`;
 
   const totalSubEl = document.getElementById('val-cap-total-sub');
   if (totalSubEl) {
     if (isLive) {
-      if ((cap.total_equity || 0) < 1.0) {
+      if (totEq < 1.0) {
         totalSubEl.textContent = 'Live Wallet (Awaiting Deposit, Min $1.00)';
       } else {
         totalSubEl.textContent = 'Live Polymarket Collateral';
       }
     } else {
-      totalSubEl.textContent = 'Canonical Base: $11.00';
+      totalSubEl.textContent = `Canonical Base: $11.00 (Current: $${totEq.toFixed(2)})`;
     }
   }
 
   const activeEl = document.getElementById('val-cap-active');
   const activeSubEl = document.getElementById('val-cap-active-sub');
   if (activeEl) {
-    const spendable = cap.spendable_active_funds !== undefined ? cap.spendable_active_funds : (cap.active_capital || 0);
+    const spendable = cap.spendable_active_funds !== undefined ? Number(cap.spendable_active_funds) : actCap;
     activeEl.textContent = `$${spendable.toFixed(2)}`;
     if (activeSubEl) {
-      const reserved = cap.active_funds_reserved !== undefined ? cap.active_funds_reserved : (cap.open_exposure || 0);
+      const reserved = cap.active_funds_reserved !== undefined ? Number(cap.active_funds_reserved) : (Number(cap.open_exposure) || 0);
       if (isLive) {
         activeSubEl.textContent = `Reserved: $${reserved.toFixed(2)} | Live Available: $${spendable.toFixed(2)}`;
       } else {
-        activeSubEl.textContent = `Reserved: $${reserved.toFixed(2)} | Total Active: $${(cap.active_capital || 0).toFixed(2)}`;
+        activeSubEl.textContent = `Reserved: $${reserved.toFixed(2)} | Total Active: $${actCap.toFixed(2)}`;
       }
     }
   }
@@ -928,7 +941,7 @@ function renderCapital(cap) {
   const protEl = document.getElementById('val-cap-protected');
   const protSubEl = document.getElementById('val-cap-protected-sub');
   if (protEl) {
-    protEl.textContent = `$${(cap.protected_capital || 0).toFixed(2)}`;
+    protEl.textContent = `$${protCap.toFixed(2)}`;
     if (protSubEl) {
       protSubEl.textContent = cap.milestone_44_activated
         ? 'Active 50/50 reserve compounding'
@@ -955,9 +968,6 @@ function renderCapital(cap) {
   }
 
   // --- Dynamic Milestone & Tier Progression Engine ---
-  const totEq = Number(cap.total_equity) || 0;
-  const actCap = Number(cap.active_capital) || 0;
-  const protCap = Number(cap.protected_capital) || 0;
   const ms44 = Boolean(cap.milestone_44_activated);
 
   // Determine current tier (Option B Tiered Compounding: $2 / $3 / $4 / $5 / $8)
