@@ -24,29 +24,47 @@ log = logging.getLogger("polybot.execution.live")
 def create_clob_client(config: Optional[PolybotConfig] = None) -> Any:
     """
     Initializes and authenticates the py-clob-client with level 2 credentials.
+    Supports py-clob-client-v2 (CLOB API v2 / CTF Exchange v2) with fallback to legacy v1.
     """
-    from py_clob_client.client import ClobClient
-
     cfg = config or PolybotConfig.load()
     pk = os.getenv("POLY_PRIVATE_KEY")
     if not pk:
         raise ValueError("POLY_PRIVATE_KEY is required for live CLOB execution.")
 
     funder = os.getenv("POLY_FUNDER_ADDRESS")
-    sig_type = int(os.getenv("POLY_SIG_TYPE", "2"))
+    sig_type = int(os.getenv("POLY_SIG_TYPE", "3"))
     host = os.getenv("CLOB_REST_URL", "https://clob.polymarket.com")
     chain_id = int(os.getenv("CHAIN_ID", "137"))
 
-    client = ClobClient(
-        host=host,
-        key=pk,
-        chain_id=chain_id,
-        signature_type=sig_type,
-        funder=funder,
-    )
-    creds = client.create_or_derive_api_creds()
-    client.set_api_creds(creds)
-    return client
+    try:
+        from py_clob_client_v2.client import ClobClient
+        client = ClobClient(
+            host=host,
+            key=pk,
+            chain_id=chain_id,
+            signature_type=sig_type,
+            funder=funder,
+        )
+        try:
+            creds = client.derive_api_key()
+        except Exception:
+            creds = client.create_or_derive_api_key()
+        client.set_api_creds(creds)
+        log.info("Live py-clob-client-v2 initialized and authenticated (sig_type=%d, funder=%s)", sig_type, funder)
+        return client
+    except ImportError:
+        from py_clob_client.client import ClobClient
+        client = ClobClient(
+            host=host,
+            key=pk,
+            chain_id=chain_id,
+            signature_type=sig_type,
+            funder=funder,
+        )
+        creds = client.create_or_derive_api_creds()
+        client.set_api_creds(creds)
+        log.info("Live py-clob-client (v1 legacy) initialized and authenticated")
+        return client
 
 
 class LiveExecutionEngine(ExecutionEngine):
@@ -76,7 +94,10 @@ class LiveExecutionEngine(ExecutionEngine):
         log.warning("LIVE TRADING AUTHORIZED: Gated mode unlocked.")
 
         # Sizing cap
-        self.micro_stake_cap_usd = float(os.getenv("MICRO_STAKE_CAP_USD", str(self.live_config.micro_stake_cap_usd or 15.0)))
+        cap_val = self.live_config.micro_stake_cap_usd if self.live_config else None
+        if cap_val is None:
+            cap_val = float(os.getenv("MICRO_STAKE_CAP_USD", "75.0"))
+        self.micro_stake_cap_usd = float(cap_val)
         log.info("Live trading safety cap: stake hard-capped at $%.2f", self.micro_stake_cap_usd)
 
         self.clob_client = clob_client
@@ -116,7 +137,10 @@ class LiveExecutionEngine(ExecutionEngine):
         try:
             bal_usd = 0.0
             if hasattr(self.clob_client, "get_balance_allowance"):
-                from py_clob_client.clob_types import AssetType, BalanceAllowanceParams
+                try:
+                    from py_clob_client_v2.clob_types import AssetType, BalanceAllowanceParams
+                except ImportError:
+                    from py_clob_client.clob_types import AssetType, BalanceAllowanceParams
                 params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
                 bal_data = self.clob_client.get_balance_allowance(params)
                 if isinstance(bal_data, dict):
@@ -239,8 +263,12 @@ class LiveExecutionEngine(ExecutionEngine):
             log.warning("Pre-order balance check warning: %s", e)
 
         try:
-            from py_clob_client.clob_types import OrderArgs
-            from py_clob_client.order_builder.constants import BUY, SELL
+            try:
+                from py_clob_client_v2.clob_types import OrderArgs
+                from py_clob_client_v2.order_builder.constants import BUY, SELL
+            except ImportError:
+                from py_clob_client.clob_types import OrderArgs
+                from py_clob_client.order_builder.constants import BUY, SELL
 
             side_str = BUY if order.action == "BUY" else SELL
             size = round(order.usd_amount / order.price, 2)
@@ -272,8 +300,10 @@ class LiveExecutionEngine(ExecutionEngine):
             log.info("[LIVE_ORDER_RESPONSE] %s", resp)
 
             order_id = resp.get("orderID") or resp.get("order_id") if isinstance(resp, dict) else None
-            if not order_id and isinstance(resp, dict) and "errorMsg" in resp:
-                raise RuntimeError(resp.get("errorMsg", "Unknown CLOB order rejection"))
+            if not order_id and isinstance(resp, dict):
+                err = resp.get("errorMsg") or resp.get("error")
+                if err:
+                    raise RuntimeError(f"CLOB order rejected: {err}")
 
             order.order_id = order_id or f"live-{int(time.time() * 1000)}"
             order.status = "FILLED"
@@ -388,7 +418,10 @@ class LiveExecutionEngine(ExecutionEngine):
         if not self.clob_client:
             return False
         try:
-            res = self.clob_client.cancel(order_id)
+            if hasattr(self.clob_client, "cancel_order"):
+                res = self.clob_client.cancel_order(order_id)
+            else:
+                res = self.clob_client.cancel(order_id)
             log.info("Cancelled live order %s: %s", order_id, res)
             return bool(res)
         except Exception as e:

@@ -238,8 +238,8 @@ class LiveConfig:
     live_confirm_token: str = ""
     private_key: str = ""
     funder_address: str = ""
-    signature_type: int = 0
-    micro_stake_cap_usd: float = 1.0
+    signature_type: int = 3
+    micro_stake_cap_usd: float = 75.0
 
     @classmethod
     def from_env(cls) -> LiveConfig:
@@ -248,8 +248,8 @@ class LiveConfig:
             live_confirm_token=os.getenv("LIVE_CONFIRM", ""),
             private_key=os.getenv("POLY_PRIVATE_KEY", ""),
             funder_address=os.getenv("POLY_FUNDER_ADDRESS", ""),
-            signature_type=_get_env_val("POLY_SIG_TYPE", 0, int),
-            micro_stake_cap_usd=_get_env_val("MICRO_STAKE_CAP_USD", 1.0, float),
+            signature_type=_get_env_val("POLY_SIG_TYPE", 3, int),
+            micro_stake_cap_usd=_get_env_val("MICRO_STAKE_CAP_USD", 75.0, float),
         )
 
     def is_live_authorized(self) -> bool:

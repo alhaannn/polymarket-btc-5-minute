@@ -62,3 +62,4 @@ def test_live_wallet_deposit_and_withdrawal_rebalancing():
         assert cm.state.milestone_44_activated
         # Active $500: Capped at $20.00 Initial and $75.00 Reversal!
         assert cm.get_trade_budgets() == (20, 75)
+

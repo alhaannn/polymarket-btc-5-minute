@@ -100,3 +100,59 @@ def test_micro_live_stake_cap_enforcement():
     res_order = engine.submit_order(order)
     assert res_order.usd_amount == 1.0
     assert res_order.status == "FILLED"
+
+
+def test_live_reversal_stake_cap_allows_up_to_75():
+    cfg = PolybotConfig()
+    cfg.live.is_live_requested = True
+    cfg.live.live_confirm_token = "YES_I_UNDERSTAND"
+    cfg.live.micro_stake_cap_usd = 75.0
+
+    mock_client = MockClobClient()
+    engine = LiveExecutionEngine(cfg, clob_client=mock_client)
+
+    order = Order(
+        order_id="ord-rev",
+        slug="btc-updown-5m-1000",
+        side="Down",
+        action="BUY",
+        order_type="taker",
+        price=0.90,
+        usd_amount=75.0,
+        shares=0.0,
+        created_at_ts=1000.0,
+    )
+    res_order = engine.submit_order(order)
+    assert res_order.usd_amount == 75.0
+    assert res_order.status == "FILLED"
+
+
+def test_live_cancel_order_supports_both_api_methods():
+    cfg = PolybotConfig()
+    cfg.live.is_live_requested = True
+    cfg.live.live_confirm_token = "YES_I_UNDERSTAND"
+
+    # Client with cancel_order (V2)
+    class V2Client:
+        def __init__(self):
+            self.cancelled = []
+        def cancel_order(self, oid):
+            self.cancelled.append(oid)
+            return True
+
+    engine_v2 = LiveExecutionEngine(cfg, clob_client=V2Client())
+    assert engine_v2.cancel_order("ord-123") is True
+    assert engine_v2.clob_client.cancelled == ["ord-123"]
+
+    # Client with cancel (V1 legacy)
+    class V1Client:
+        def __init__(self):
+            self.cancelled = []
+        def cancel(self, oid):
+            self.cancelled.append(oid)
+            return True
+
+    engine_v1 = LiveExecutionEngine(cfg, clob_client=V1Client())
+    assert engine_v1.cancel_order("ord-456") is True
+    assert engine_v1.clob_client.cancelled == ["ord-456"]
+
