@@ -18,12 +18,16 @@
 | **Remote Project Path** | `/home/ubuntu/polymarket-btc-5-minute` | `/home/ubuntu/polymarket-btc-5-minute` |
 | **GitHub Repository** | `https://github.com/alhaannn/polymarket-btc-5-minute.git` | `https://github.com/alhaannn/polymarket-btc-5-minute.git` |
 | **Active Branch** | `feature/new-5m-strategy` | `feature/new-5m-strategy` |
-| **PM2 Process Name** | **`polybot-live`** (ID: 0) | **`polybot-paper`** (ID: 1) |
-| **Dashboard Port** | **`8080`** | **`8081`** |
-| **Direct Web URL** | 👉 **[http://3.252.144.120:8080](http://3.252.144.120:8080)** | 👉 **[http://3.252.144.120:8081](http://3.252.144.120:8081)** |
+| **PM2 Process Name** | **`polybot-live`** (ID: 0) | **`polybot-paper`** (ID: 2) |
+| **Internal Localhost Port** | `127.0.0.1:8080` (Closed to public) | `127.0.0.1:8081` (Closed to public) |
+| **Public Encrypted HTTPS URL** | 🔒 **[`https://alphora.duckdns.org/`](https://alphora.duckdns.org/)** | 🔒 **[`https://alphora.duckdns.org/paper/`](https://alphora.duckdns.org/paper/)** |
+| **DuckDNS Dynamic Domain** | **`alphora.duckdns.org`** (Auto-syncs every 10 min via cron) |
+| **TLS/SSL Encryption** | Official Let's Encrypt Wildcard/Domain TLS (Auto-renewing) |
+| **Workstation Authentication** | **Username:** `admin` <br> **Password:** `Alphora2026!SecureTrade` |
+| **Critical Action Guard** | **4-Digit Action PIN:** `7788` (Required for Run/Pause/Stop) |
 | **Execution Mode** | `EXECUTION_MODE=live` (CLOB real orders) | `EXECUTION_MODE=paper` (Simulated taker) |
 | **Bot Status** | **`PAUSED`** (Awaiting deposit to activate) | **`RUNNING`** (Continuous benchmark) |
-| **Ledger Database** | `/data/live_ledger.db` (Real-Time Live Balance: **$0.03** synced) | `/data/paper_ledger.db` (Migrated benchmark equity) |
+| **Ledger Database** | `/data/live_ledger.db` (Real-Time Live Balance: **$0.03** synced) | `/data/paper_ledger.db` (Equity: **$36.00** active) |
 | **Polygon Funder Address** | `0x5923CFc24AA6f876f27bc9257890126a8c3E72B6` | Local virtual balance |
 | **Polygon Signer Address** | `0x284f018FfF5B0Ec392440693eB30d13ae5f2604F` | N/A |
 | **Signature Type** | `POLY_SIG_TYPE=2` (Proxy/Gnosis Safe) | N/A |
