@@ -3,6 +3,40 @@
  * Handles real-time polling, gauge animation, tab switching, and bot controls.
  */
 
+const API_BASE = window.location.pathname.startsWith('/paper') ? '/paper' : '';
+
+let authConfig = { authenticated: false, auth_enabled: false, pin_required: false, username: '' };
+let pendingAction = null;
+
+async function authFetch(url, options = {}) {
+  const fullUrl = url.startsWith('/') ? `${API_BASE}${url}` : url;
+  const res = await fetch(fullUrl, options);
+  if (res.status === 401) {
+    window.location.href = `${API_BASE}/login`;
+    return res;
+  }
+  return res;
+}
+
+async function checkAuthStatus() {
+  try {
+    const res = await fetch(`${API_BASE}/api/auth/me`);
+    if (res.status === 401) {
+      window.location.href = `${API_BASE}/login`;
+      return;
+    }
+    if (res.ok) {
+      authConfig = await res.json();
+      const logoutBtn = document.getElementById('btn-auth-logout');
+      if (logoutBtn) {
+        logoutBtn.style.display = authConfig.auth_enabled ? 'inline-block' : 'none';
+      }
+    }
+  } catch (err) {
+    console.debug('Auth check error:', err);
+  }
+}
+
 let activePerfTab = 'lifetime';
 let performanceData = null;
 let lastLogTimestamp = 0;
@@ -25,6 +59,7 @@ let currentSchedule = null;
 let lastScheduleReceiptTs = 0;
 
 document.addEventListener('DOMContentLoaded', () => {
+  checkAuthStatus();
   initPolling();
   updateClockIST();
   setInterval(updateClockIST, 1000);
@@ -85,7 +120,7 @@ function initPolling() {
 
 async function fetchArchiveLogs() {
   try {
-    const res = await fetch('/api/logs?limit=1000');
+    const res = await authFetch('/api/logs?limit=1000');
     if (!res.ok) throw new Error('Logs fetch failed');
     const logs = await res.json();
     allArchiveLogs = logs || [];
@@ -99,7 +134,7 @@ async function fetchArchiveLogs() {
 
 async function fetchState() {
   try {
-    const res = await fetch('/api/state');
+    const res = await authFetch('/api/state');
     if (!res.ok) throw new Error('State fetch failed');
     const data = await res.json();
     renderState(data);
@@ -111,7 +146,7 @@ async function fetchState() {
 
 async function fetchPerformance() {
   try {
-    const res = await fetch('/api/performance');
+    const res = await authFetch('/api/performance');
     if (!res.ok) throw new Error('Performance fetch failed');
     performanceData = await res.json();
     renderPerformanceTab();
@@ -122,7 +157,7 @@ async function fetchPerformance() {
 
 async function fetchTrades() {
   try {
-    const res = await fetch('/api/trades?limit=1000');
+    const res = await authFetch('/api/trades?limit=1000');
     if (!res.ok) throw new Error('Trades fetch failed');
     const trades = await res.json();
     allTrades = trades || [];
@@ -716,19 +751,115 @@ function renderTradesTable(trades) {
   }
 }
 
-async function sendControl(action) {
+function sendControl(action) {
+  if (authConfig && authConfig.pin_required) {
+    openPinModal(action);
+  } else {
+    executeControl(action);
+  }
+}
+
+async function executeControl(action, pin = '') {
   try {
-    const res = await fetch('/api/control', {
+    const payload = { action };
+    if (pin) payload.pin = pin;
+    const res = await authFetch('/api/control', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action }),
+      body: JSON.stringify(payload),
     });
     const result = await res.json();
+    if (!res.ok) {
+      throw new Error(result.message || 'Action failed');
+    }
     console.log('Control response:', result);
     fetchState();
+    return true;
   } catch (err) {
-    alert('Failed to send control command: ' + err.message);
+    if (!pin) {
+      alert('Failed to send control command: ' + err.message);
+    }
+    throw err;
   }
+}
+
+function openPinModal(action) {
+  pendingAction = action;
+  const overlay = document.getElementById('pin-modal-overlay');
+  const prompt = document.getElementById('pin-modal-prompt');
+  const input = document.getElementById('action-pin-input');
+  const errBox = document.getElementById('pin-modal-error');
+  if (errBox) {
+    errBox.textContent = '';
+    errBox.classList.add('hidden');
+  }
+  if (input) {
+    input.value = '';
+  }
+  if (prompt) {
+    prompt.innerHTML = `You are requesting to change bot state to <strong>${action.toUpperCase()}</strong>. Enter your 4-digit Security PIN to confirm:`;
+  }
+  if (overlay) {
+    overlay.classList.remove('hidden');
+    setTimeout(() => {
+      if (input) input.focus();
+    }, 100);
+  }
+}
+
+function closePinModal() {
+  pendingAction = null;
+  const overlay = document.getElementById('pin-modal-overlay');
+  if (overlay) overlay.classList.add('hidden');
+}
+
+function handlePinKey(event) {
+  if (event.key === 'Enter') {
+    submitPinAction();
+  } else if (event.key === 'Escape') {
+    closePinModal();
+  }
+}
+
+async function submitPinAction() {
+  const input = document.getElementById('action-pin-input');
+  const errBox = document.getElementById('pin-modal-error');
+  const btn = document.getElementById('btn-confirm-action-pin');
+  const pin = input ? input.value.trim() : '';
+
+  if (!pin) {
+    if (errBox) {
+      errBox.textContent = 'Please enter your Security PIN';
+      errBox.classList.remove('hidden');
+    }
+    return;
+  }
+
+  if (btn) btn.disabled = true;
+  try {
+    await executeControl(pendingAction, pin);
+    closePinModal();
+  } catch (err) {
+    if (errBox) {
+      errBox.textContent = err.message || 'Invalid Security PIN';
+      errBox.classList.remove('hidden');
+    }
+    if (input) {
+      input.value = '';
+      input.focus();
+    }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function logoutUser() {
+  try {
+    await fetch(`${API_BASE}/api/auth/logout`, { method: 'POST' });
+  } catch (e) {
+    console.debug('Logout error:', e);
+  }
+  window.location.href = `${API_BASE}/login`;
 }
 
 function clearLocalLogs() {
@@ -739,7 +870,7 @@ function clearLocalLogs() {
 }
 
 function exportTradesCSV() {
-  window.open('/api/trades/csv', '_blank');
+  window.open(`${API_BASE}/api/trades/csv`, '_blank');
 }
 
 function escapeHtml(str) {
@@ -749,7 +880,7 @@ function escapeHtml(str) {
 
 async function fetchCapital() {
   try {
-    const res = await fetch('/api/capital');
+    const res = await authFetch('/api/capital');
     if (!res.ok) throw new Error('Capital fetch failed');
     const data = await res.json();
     renderCapital(data);
@@ -1032,7 +1163,7 @@ function renderCapital(cap) {
 
 async function fetchCapitalTransactions() {
   try {
-    const res = await fetch('/api/capital/transactions?limit=1000');
+    const res = await authFetch('/api/capital/transactions?limit=1000');
     if (!res.ok) throw new Error('Capital transactions fetch failed');
     const txs = await res.json();
     allCapitalTxs = txs || [];
@@ -1219,7 +1350,7 @@ function switchArchiveTab(tabName) {
 
 async function triggerReconcile() {
   try {
-    const res = await fetch('/api/capital/reconcile', { method: 'POST' });
+    const res = await authFetch('/api/capital/reconcile', { method: 'POST' });
     const result = await res.json();
     console.log('Reconciliation result:', result);
     fetchCapital();

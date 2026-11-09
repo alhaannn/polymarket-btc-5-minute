@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="static/style.css">
 </head>
 <body>
   <!-- Header Bar -->
@@ -46,6 +46,7 @@
       <button class="btn btn-primary" id="btn-control-start" onclick="sendControl('start')">▶ Run</button>
       <button class="btn btn-secondary" id="btn-control-pause" onclick="sendControl('pause')">⏸ Pause</button>
       <button class="btn btn-danger" id="btn-control-stop" onclick="sendControl('stop')">⏹ Stop</button>
+      <button class="btn btn-outline-auth" id="btn-auth-logout" onclick="logoutUser()" title="Sign out of workstation session">Sign Out</button>
     </div>
   </header>
 
@@ -478,6 +479,32 @@
     </div>
   </footer>
 
-  <script src="/static/app.js"></script>
+  <!-- Security Action PIN Modal -->
+  <div id="pin-modal-overlay" class="modal-backdrop hidden">
+    <div class="modal-dialog">
+      <div class="modal-top">
+        <div class="modal-shield">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+          </svg>
+          <span class="modal-heading">Authorization Required</span>
+        </div>
+        <button type="button" class="modal-close" onclick="closePinModal()">&times;</button>
+      </div>
+      <div class="modal-content">
+        <p class="modal-prompt" id="pin-modal-prompt">Enter your 4-digit Security PIN to confirm this action:</p>
+        <div class="pin-input-container">
+          <input type="password" id="action-pin-input" maxlength="8" class="pin-code-field" placeholder="••••" autocomplete="off" onkeydown="handlePinKey(event)">
+        </div>
+        <div id="pin-modal-error" class="pin-error-text hidden"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-cancel" onclick="closePinModal()">Cancel</button>
+        <button type="button" class="btn btn-confirm-action" id="btn-confirm-action-pin" onclick="submitPinAction()">Authorize Action</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="static/app.js"></script>
 </body>
 </html>

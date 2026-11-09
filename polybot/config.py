@@ -248,6 +248,11 @@ class DashboardConfig:
     host: str = "127.0.0.1"
     port: int = 8080
     enabled: bool = True
+    auth_enabled: bool = False
+    auth_username: str = "admin"
+    auth_password_hash: str = ""
+    auth_pin_hash: str = ""
+    auth_session_secret: str = ""
 
     @classmethod
     def from_env(cls) -> DashboardConfig:
@@ -255,6 +260,11 @@ class DashboardConfig:
             host=os.getenv("DASHBOARD_HOST", "127.0.0.1"),
             port=_get_env_val("DASHBOARD_PORT", 8080, int),
             enabled=_get_env_val("DASHBOARD_ENABLED", True, bool),
+            auth_enabled=_get_env_val("DASHBOARD_AUTH_ENABLED", False, bool),
+            auth_username=os.getenv("DASHBOARD_USERNAME", "admin"),
+            auth_password_hash=os.getenv("DASHBOARD_PASSWORD_HASH", os.getenv("DASHBOARD_PASSWORD", "")),
+            auth_pin_hash=os.getenv("DASHBOARD_ACTION_PIN_HASH", os.getenv("DASHBOARD_PIN", "")),
+            auth_session_secret=os.getenv("DASHBOARD_SESSION_SECRET", ""),
         )
 
 

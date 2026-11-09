@@ -196,11 +196,22 @@ async def run_paper(
 
     dash_server = None
     if config.dashboard.enabled:
+        auth_mgr = None
+        if config.dashboard.auth_enabled:
+            from polybot.dashboard.auth import AuthManager
+            auth_mgr = AuthManager(
+                username=config.dashboard.auth_username,
+                password_hash=config.dashboard.auth_password_hash,
+                pin_hash=config.dashboard.auth_pin_hash,
+                session_secret=config.dashboard.auth_session_secret,
+                enabled=True,
+            )
         dash_server = DashboardServer(
             dash_state,
             ledger,
             capital_mgr=capital_mgr,
             reconciler=reconciler,
+            auth_mgr=auth_mgr,
             host=config.dashboard.host,
             port=config.dashboard.port,
         )
@@ -770,11 +781,22 @@ async def run_dashboard(config: PolybotConfig) -> None:
     state = DashboardState()
     state.set_bot_status("STANDALONE_VIEW")
     state.update_capital(capital_mgr.state.to_dict())
+    auth_mgr = None
+    if config.dashboard.auth_enabled:
+        from polybot.dashboard.auth import AuthManager
+        auth_mgr = AuthManager(
+            username=config.dashboard.auth_username,
+            password_hash=config.dashboard.auth_password_hash,
+            pin_hash=config.dashboard.auth_pin_hash,
+            session_secret=config.dashboard.auth_session_secret,
+            enabled=True,
+        )
     server = DashboardServer(
         state,
         ledger,
         capital_mgr=capital_mgr,
         reconciler=reconciler,
+        auth_mgr=auth_mgr,
         host=config.dashboard.host,
         port=config.dashboard.port
     )
