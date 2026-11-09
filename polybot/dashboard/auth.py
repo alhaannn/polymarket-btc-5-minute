@@ -91,6 +91,7 @@ class AuthManager:
 
         # In-memory session store: token -> (username, expiry_timestamp)
         self._sessions: Dict[str, Tuple[str, float]] = {}
+        self._revoked_tokens: set[str] = set()
 
         # In-memory IP failure tracking: ip -> list of failure timestamps
         self._ip_failures: Dict[str, List[float]] = {}
@@ -154,34 +155,70 @@ class AuthManager:
         return verify_secret(pin.strip(), self.pin_hash)
 
     def create_session(self, username: str) -> str:
-        """Generates a cryptographically secure 32-byte session token."""
-        token = secrets.token_urlsafe(32)
-        expiry = time.time() + self.session_expiry_sec
-        self._sessions[token] = (username, expiry)
+        """Generates a cryptographically signed HMAC session token."""
+        expiry = int(time.time() + self.session_expiry_sec)
+        nonce = secrets.token_hex(8)
+        payload = f"{username}:{expiry}:{nonce}"
+        sig = hmac.new(
+            self.session_secret.encode("utf-8"),
+            payload.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        token = f"{payload}:{sig}"
+        self._sessions[token] = (username, float(expiry))
         self._cleanup_expired_sessions()
         return token
 
     def validate_session(self, token: Optional[str]) -> Optional[str]:
         """
-        Validates session token. Returns username if valid, None if invalid or expired.
+        Validates session token using cryptographic HMAC signature and expiry.
+        Compatible across multi-process bot instances sharing DASHBOARD_SESSION_SECRET.
         """
         if not self.enabled:
             return "anonymous"
 
-        if not token or token not in self._sessions:
+        if not token:
             return None
 
-        username, expiry = self._sessions[token]
-        if time.time() > expiry:
-            del self._sessions[token]
+        # Check local revocation
+        if token in self._revoked_tokens:
             return None
 
-        return username
+        # 1. Fast local memory check
+        if token in self._sessions:
+            username, expiry = self._sessions[token]
+            if time.time() > expiry:
+                del self._sessions[token]
+                return None
+            return username
+
+        # 2. Cryptographic signature check (for cross-process verification between live & paper)
+        try:
+            parts = token.split(":")
+            if len(parts) == 4:
+                username, expiry_str, nonce, expected_sig = parts
+                expiry = int(expiry_str)
+                if time.time() > expiry:
+                    return None
+                payload = f"{username}:{expiry}:{nonce}"
+                computed_sig = hmac.new(
+                    self.session_secret.encode("utf-8"),
+                    payload.encode("utf-8"),
+                    hashlib.sha256,
+                ).hexdigest()
+                if hmac.compare_digest(computed_sig, expected_sig):
+                    self._sessions[token] = (username, float(expiry))
+                    return username
+        except Exception:
+            return None
+
+        return None
 
     def invalidate_session(self, token: str) -> None:
         """Invalidates a session token (logout)."""
         if token in self._sessions:
             del self._sessions[token]
+        self._revoked_tokens.add(token)
 
     def _cleanup_expired_sessions(self) -> None:
         """Removes expired sessions from memory."""

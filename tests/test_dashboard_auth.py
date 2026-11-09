@@ -53,6 +53,34 @@ def test_auth_manager_session_lifecycle():
     assert auth.validate_session(token) is None
 
 
+def test_cross_instance_hmac_session_validation():
+    shared_secret = "super_secret_session_key_12345"
+    instance_live = AuthManager(
+        username="admin",
+        password_hash=hash_secret("pass"),
+        session_secret=shared_secret,
+        enabled=True,
+    )
+    instance_paper = AuthManager(
+        username="admin",
+        password_hash=hash_secret("pass"),
+        session_secret=shared_secret,
+        enabled=True,
+    )
+
+    # Login and token generated on Live instance
+    token = instance_live.create_session("admin")
+    assert instance_live.validate_session(token) == "admin"
+
+    # Paper instance (separate memory) validates token via cryptographic HMAC signature
+    assert instance_paper.validate_session(token) == "admin"
+
+    # Tampered token fails on both
+    tampered = token[:-4] + "ffff"
+    assert instance_live.validate_session(tampered) is None
+    assert instance_paper.validate_session(tampered) is None
+
+
 def test_brute_force_ip_lockout():
     auth = AuthManager(
         username="admin",
