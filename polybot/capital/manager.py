@@ -72,25 +72,75 @@ class CapitalManager:
         self.state = self.ledger.get_state()
         log.info("[CAPITAL_RESET] CapitalManager state reset to $%.2f starting equity", starting_equity_usd)
 
-    def sync_live_wallet_balance(self, live_balance_usd: float) -> bool:
+    def sync_live_wallet_balance(self, live_balance_usd: float, auto_rebalance: bool = True) -> bool:
         """
         Synchronizes CapitalManager state with the real-time live wallet balance from Polymarket CLOB.
         Dynamically scales active capital and total equity to reflect external deposits/withdrawals.
+        If auto_rebalance is True (default) and balance >= $44.00, rebalances 50/50 into Active and Protected Vault.
+        If balance < $44.00, 100% is assigned to Active capital ($0 Protected).
         Returns True if the balance changed.
         """
-        new_cents = max(0, int(round(live_balance_usd * 100)))
-        if self.state.active_capital_cents == new_cents:
+        new_total_cents = max(0, int(round(live_balance_usd * 100)))
+        if self.state.total_equity_cents == new_total_cents:
             return False
 
-        old_active = self.state.active_capital
         old_total = self.state.total_equity
-        self.state.active_capital_cents = new_cents
-        self.state.total_equity_cents = new_cents + self.state.protected_capital_cents
+        old_active = self.state.active_capital
+        old_prot = self.state.protected_capital
+        active_before = self.state.active_capital_cents
+        prot_before = self.state.protected_capital_cents
+        tot_before = self.state.total_equity_cents
+
+        if auto_rebalance:
+            if new_total_cents >= 4400:
+                # 50/50 split (odd-cent allocation policy: active gets cents // 2, protected gets remainder)
+                new_active_cents = new_total_cents // 2
+                new_prot_cents = new_total_cents - new_active_cents
+                self.state.milestone_44_activated = True
+            else:
+                new_active_cents = new_total_cents
+                new_prot_cents = 0
+                self.state.milestone_44_activated = False
+        else:
+            diff_cents = new_total_cents - tot_before
+            new_active_cents = max(0, active_before + diff_cents)
+            new_prot_cents = prot_before
+
+        self.state.active_capital_cents = new_active_cents
+        self.state.protected_capital_cents = new_prot_cents
+        self.state.total_equity_cents = new_active_cents + new_prot_cents
         self.state.updated_at_ts = time.time()
-        self.ledger.save_state(self.state)
+
+        now_ts = time.time()
+        tx = CapitalTransaction(
+            tx_id=f"tx-sync-{int(now_ts * 1000)}-{uuid.uuid4().hex[:4]}",
+            event_type=TransactionType.RECONCILIATION_ADJUSTMENT,
+            amount_cents=new_total_cents - tot_before,
+            active_before_cents=active_before,
+            active_after_cents=new_active_cents,
+            protected_before_cents=prot_before,
+            protected_after_cents=new_prot_cents,
+            total_before_cents=tot_before,
+            total_after_cents=self.state.total_equity_cents,
+            fee_cents=0,
+            trading_day=ist_today_str(now_ts),
+            reason=(
+                f"Live wallet sync & rebalance: Total ${old_total:.2f} -> ${live_balance_usd:.2f} "
+                f"(Active ${self.state.active_capital:.2f}, Protected ${self.state.protected_capital:.2f})"
+            ),
+            idempotency_key=f"sync-{int(now_ts * 1000)}",
+        )
+        self.ledger.save_state_and_transaction(self.state, tx)
+        self.verify_invariants()
+
+        initial_b, rev_b = self.get_trade_budgets()
         log.info(
-            "[LIVE_WALLET_SYNC] Real-time live balance updated: Active $%.2f -> $%.2f | Total $%.2f -> $%.2f",
-            old_active, self.state.active_capital, old_total, self.state.total_equity
+            "[LIVE_WALLET_SYNC] Real-time live balance updated: Total $%.2f -> $%.2f | "
+            "Active: $%.2f -> $%.2f, Protected: $%.2f -> $%.2f | Budgets: Initial=$%d, Reversal=$%d",
+            old_total, self.state.total_equity,
+            old_active, self.state.active_capital,
+            old_prot, self.state.protected_capital,
+            initial_b, rev_b,
         )
         return True
 

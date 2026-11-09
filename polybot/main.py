@@ -309,24 +309,24 @@ async def run_paper(
                 env_start = os.getenv("STARTING_EQUITY_USD")
                 if current_bal <= 0.0 and env_start:
                     current_bal = float(env_start)
-                if abs(current_bal - capital_mgr.state.active_capital) >= 0.009:
-                    old_bal = capital_mgr.state.active_capital
-                    capital_mgr.sync_live_wallet_balance(current_bal)
+                if abs(current_bal - capital_mgr.state.total_equity) >= 0.009:
+                    old_tot = capital_mgr.state.total_equity
+                    capital_mgr.sync_live_wallet_balance(current_bal, auto_rebalance=True)
                     open_exp = engine.get_open_exposure()
-                    init_b, rev_b = budget_calc.get_budgets(current_bal)
+                    init_b, rev_b = capital_mgr.get_trade_budgets()
                     dash_cap = capital_mgr.state.to_dict()
                     dash_cap.update({
                         "current_initial_budget": init_b,
                         "current_reversal_budget": rev_b,
                         "open_exposure": round(open_exp, 2),
-                        "spendable_active_funds": max(0.0, round(current_bal - open_exp, 2)),
+                        "spendable_active_funds": max(0.0, round(capital_mgr.state.active_capital - open_exp, 2)),
                         "active_funds_reserved": round(open_exp, 2),
                         "protected_funds": capital_mgr.state.protected_capital,
                         "unsettled_funds": round(open_exp, 2),
                     })
                     dash_state.update_capital(dash_cap)
-                    dash_state.add_log("BALANCE", f"Live wallet balance updated: ${old_bal:.2f} -> ${current_bal:.2f} (Init: ${init_b}, Rev: ${rev_b})")
-                    log.info("[LIVE_BALANCE_SYNC] Wallet balance updated: $%.2f -> $%.2f (Init: $%d, Rev: $%d)", old_bal, current_bal, init_b, rev_b)
+                    dash_state.add_log("BALANCE", f"Live wallet rebalanced: Total ${old_tot:.2f} -> ${current_bal:.2f} (Active: ${capital_mgr.state.active_capital:.2f}, Prot: ${capital_mgr.state.protected_capital:.2f}, Init: ${init_b}, Rev: ${rev_b})")
+                    log.info("[LIVE_BALANCE_SYNC] Wallet rebalanced: Total $%.2f -> $%.2f (Active: $%.2f, Prot: $%.2f, Init: $%d, Rev: $%d)", old_tot, current_bal, capital_mgr.state.active_capital, capital_mgr.state.protected_capital, init_b, rev_b)
 
             time_state = session_mgr.sync(now)
             window_start = int(time_state.window_start_ts)
