@@ -2,6 +2,7 @@ import pytest
 from pathlib import Path
 from polybot.config import LiveConfig, PolybotConfig
 from polybot.execution.base import Order
+from polybot.execution.ledger import TradeLedger
 from polybot.execution.live import LiveExecutionEngine
 
 
@@ -76,14 +77,15 @@ def test_live_reconciliation_fails_closed_on_mismatch(tmp_path: Path):
     assert "MISMATCH" in str(exc.value)
 
 
-def test_micro_live_stake_cap_enforcement():
+def test_micro_live_stake_cap_enforcement(tmp_path: Path):
     cfg = PolybotConfig()
     cfg.live.is_live_requested = True
     cfg.live.live_confirm_token = "YES_I_UNDERSTAND"
     cfg.live.micro_stake_cap_usd = 1.0
 
     mock_client = MockClobClient()
-    engine = LiveExecutionEngine(cfg, clob_client=mock_client)
+    test_ledger = TradeLedger(tmp_path / "test_micro.db")
+    engine = LiveExecutionEngine(cfg, clob_client=mock_client, ledger=test_ledger)
 
     # Proposed order is $5.00 -> should be clamped to $1.00
     order = Order(
@@ -103,14 +105,15 @@ def test_micro_live_stake_cap_enforcement():
     assert res_order.status == "FILLED"
 
 
-def test_live_reversal_stake_cap_allows_up_to_75():
+def test_live_reversal_stake_cap_allows_up_to_75(tmp_path: Path):
     cfg = PolybotConfig()
     cfg.live.is_live_requested = True
     cfg.live.live_confirm_token = "YES_I_UNDERSTAND"
     cfg.live.micro_stake_cap_usd = 75.0
 
     mock_client = MockClobClient()
-    engine = LiveExecutionEngine(cfg, clob_client=mock_client)
+    test_ledger = TradeLedger(tmp_path / "test_rev.db")
+    engine = LiveExecutionEngine(cfg, clob_client=mock_client, ledger=test_ledger)
 
     order = Order(
         order_id="ord-rev",
@@ -128,7 +131,7 @@ def test_live_reversal_stake_cap_allows_up_to_75():
     assert res_order.status == "FILLED"
 
 
-def test_live_cancel_order_supports_both_api_methods():
+def test_live_cancel_order_supports_both_api_methods(tmp_path: Path):
     cfg = PolybotConfig()
     cfg.live.is_live_requested = True
     cfg.live.live_confirm_token = "YES_I_UNDERSTAND"
@@ -141,7 +144,7 @@ def test_live_cancel_order_supports_both_api_methods():
             self.cancelled.append(oid)
             return True
 
-    engine_v2 = LiveExecutionEngine(cfg, clob_client=V2Client())
+    engine_v2 = LiveExecutionEngine(cfg, clob_client=V2Client(), ledger=TradeLedger(tmp_path / "test_v2.db"))
     assert engine_v2.cancel_order("ord-123") is True
     assert engine_v2.clob_client.cancelled == ["ord-123"]
 
@@ -153,12 +156,12 @@ def test_live_cancel_order_supports_both_api_methods():
             self.cancelled.append(oid)
             return True
 
-    engine_v1 = LiveExecutionEngine(cfg, clob_client=V1Client())
+    engine_v1 = LiveExecutionEngine(cfg, clob_client=V1Client(), ledger=TradeLedger(tmp_path / "test_v1.db"))
     assert engine_v1.cancel_order("ord-456") is True
     assert engine_v1.clob_client.cancelled == ["ord-456"]
 
 
-def test_live_order_minimum_floor_enforcement():
+def test_live_order_minimum_floor_enforcement(tmp_path: Path):
     """Ensure orders with float rounding never fall below Polymarket's $1.00 USD floor."""
     cfg = PolybotConfig()
     cfg.live.is_live_requested = True
@@ -166,7 +169,8 @@ def test_live_order_minimum_floor_enforcement():
     cfg.live.micro_stake_cap_usd = 75.0
 
     mock_client = MockClobClient()
-    engine = LiveExecutionEngine(cfg, clob_client=mock_client)
+    test_ledger = TradeLedger(tmp_path / "test_floor.db")
+    engine = LiveExecutionEngine(cfg, clob_client=mock_client, ledger=test_ledger)
 
     # Price 0.89: 1.00 / 0.89 = 1.12359.
     # Standard 2-decimal round gives 1.12 -> 1.12 * 0.89 = $0.9968 (rejected by CLOB).
