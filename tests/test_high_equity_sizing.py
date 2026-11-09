@@ -147,3 +147,4 @@ def test_capital_manager_integration():
         cm.state.total_equity_cents = 100000
         init_b, rev_b = cm.get_trade_budgets()
         assert (init_b, rev_b) == (20, 75)
+
