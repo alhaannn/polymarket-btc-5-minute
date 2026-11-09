@@ -137,6 +137,14 @@ class StrategyConfig:
     recovery_max_balance_pct: float = 0.80
     recovery_stop_loss_p: float = 0.50
 
+    # High-Equity Orderbook Safeguards (Century Tier >$100 Total Equity / >$50 Active)
+    enable_high_equity_transition: bool = True
+    century_active_threshold_usd: float = 50.0
+    max_initial_stake_usd: float = 20.0
+    max_reversal_stake_usd: float = 75.0
+    high_equity_reversal_multiplier: float = 4.0
+    high_equity_initial_ratio: float = 0.08
+
     @classmethod
     def from_env(cls) -> StrategyConfig:
         return cls(
@@ -184,6 +192,12 @@ class StrategyConfig:
             recovery_max_time_sec=_get_env_val("RECOVERY_MAX_TIME_SEC", 280.0, float),
             recovery_max_balance_pct=_get_env_val("RECOVERY_MAX_BALANCE_PCT", 0.80, float),
             recovery_stop_loss_p=_get_env_val("RECOVERY_STOP_LOSS_P", 0.50, float),
+            enable_high_equity_transition=_get_env_val("ENABLE_HIGH_EQUITY_TRANSITION", True, bool),
+            century_active_threshold_usd=_get_env_val("CENTURY_ACTIVE_THRESHOLD_USD", 50.0, float),
+            max_initial_stake_usd=_get_env_val("MAX_INITIAL_STAKE_USD", 20.0, float),
+            max_reversal_stake_usd=_get_env_val("MAX_REVERSAL_STAKE_USD", 75.0, float),
+            high_equity_reversal_multiplier=_get_env_val("HIGH_EQUITY_REVERSAL_MULTIPLIER", 4.0, float),
+            high_equity_initial_ratio=_get_env_val("HIGH_EQUITY_INITIAL_RATIO", 0.08, float),
         )
 
 

@@ -29,7 +29,7 @@ def test_starting_capital_initialization(tmp_path: Path):
 def test_canonical_budget_rounding_table(tmp_path: Path):
     """Verifies all exact balances and budgets from Roadmap Section 1.2 Table."""
     db_path = tmp_path / "test_capital.db"
-    mgr = CapitalManager(db_path=db_path, starting_equity_usd=11.0)
+    mgr = CapitalManager(db_path=db_path, starting_equity_usd=11.0, sizing_mode="canonical")
 
     table = [
         (11.0, 1, 10),
@@ -117,7 +117,7 @@ def test_option_b_next_day_reserve_activation(tmp_path: Path):
     Active $30, Protected $110 -> 50% release of protected ($55) added to active ($85 active, $55 protected).
     """
     db_path = tmp_path / "test_capital.db"
-    mgr = CapitalManager(db_path=db_path, starting_equity_usd=140.0)
+    mgr = CapitalManager(db_path=db_path, starting_equity_usd=140.0, sizing_mode="canonical")
     mgr.state.active_capital_cents = 3000
     mgr.state.protected_capital_cents = 11000
     mgr.state.total_equity_cents = 14000
@@ -162,7 +162,7 @@ def test_option_b_next_day_reserve_activation(tmp_path: Path):
 def test_repeated_qualifying_shutdown(tmp_path: Path):
     """Section 1.6: Repeated qualifying shutdown with $55 protected releases $27.50."""
     db_path = tmp_path / "test_capital.db"
-    mgr = CapitalManager(db_path=db_path, starting_equity_usd=140.0)
+    mgr = CapitalManager(db_path=db_path, starting_equity_usd=140.0, sizing_mode="canonical")
     mgr.state.active_capital_cents = 8500
     mgr.state.protected_capital_cents = 5500
     mgr.state.total_equity_cents = 14000

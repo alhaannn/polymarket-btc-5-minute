@@ -41,8 +41,23 @@ class CapitalManager:
         db_path: Path | str = Path("data/paper_ledger.db"),
         starting_equity_usd: float = 11.0,
         sizing_mode: Optional[str] = None,
+        enable_high_equity_transition: Optional[bool] = None,
+        century_active_threshold_usd: Optional[float] = None,
+        max_initial_stake_usd: Optional[float] = None,
+        max_reversal_stake_usd: Optional[float] = None,
+        high_equity_reversal_multiplier: Optional[float] = None,
+        high_equity_initial_ratio: Optional[float] = None,
     ):
         self.sizing_mode = sizing_mode or os.getenv("SIZING_MODE", "canonical")
+        self.enable_high_equity_transition = (
+            enable_high_equity_transition if enable_high_equity_transition is not None
+            else (self.sizing_mode in ("dynamic", "high_equity"))
+        )
+        self.century_active_threshold_usd = century_active_threshold_usd
+        self.max_initial_stake_usd = max_initial_stake_usd
+        self.max_reversal_stake_usd = max_reversal_stake_usd
+        self.high_equity_reversal_multiplier = high_equity_reversal_multiplier
+        self.high_equity_initial_ratio = high_equity_initial_ratio
         self.ledger = ledger or CapitalLedger(db_path)
         self.state = self.ledger.get_state()
         if self.state is None:
@@ -238,7 +253,21 @@ class CapitalManager:
 
         active_usd = self.state.active_capital
         from polybot.capital.sizing import DynamicTradeBudgetCalculator
-        calc = DynamicTradeBudgetCalculator(sizing_mode=self.sizing_mode)
+        calc_kwargs = {
+            "sizing_mode": self.sizing_mode,
+            "enable_high_equity_transition": self.enable_high_equity_transition,
+        }
+        if self.century_active_threshold_usd is not None:
+            calc_kwargs["century_active_threshold_usd"] = self.century_active_threshold_usd
+        if self.max_initial_stake_usd is not None:
+            calc_kwargs["max_initial_stake_usd"] = self.max_initial_stake_usd
+        if self.max_reversal_stake_usd is not None:
+            calc_kwargs["max_reversal_stake_usd"] = self.max_reversal_stake_usd
+        if self.high_equity_reversal_multiplier is not None:
+            calc_kwargs["high_equity_reversal_multiplier"] = self.high_equity_reversal_multiplier
+        if self.high_equity_initial_ratio is not None:
+            calc_kwargs["high_equity_initial_ratio"] = self.high_equity_initial_ratio
+        calc = DynamicTradeBudgetCalculator(**calc_kwargs)
         initial_budget = calc.calculate_initial_budget(active_usd)
         reversal_budget = calc.calculate_reversal_budget(active_usd)
 

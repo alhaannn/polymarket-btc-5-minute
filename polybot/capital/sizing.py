@@ -51,10 +51,24 @@ class DynamicTradeBudgetCalculator:
         min_order_usd: float = 1.0,
         taker_fee_rate: float = 0.001,
         sizing_mode: str = "canonical",
+        enable_high_equity_transition: bool = False,
+        century_active_threshold_usd: float = 50.0,
+        max_initial_stake_usd: float = 20.0,
+        max_reversal_stake_usd: float = 75.0,
+        high_equity_reversal_multiplier: float = 4.0,
+        high_equity_initial_ratio: float = 0.08,
     ):
         self.min_order_usd = min_order_usd
         self.taker_fee_rate = taker_fee_rate
         self.sizing_mode = sizing_mode
+        self.enable_high_equity_transition = (
+            enable_high_equity_transition or sizing_mode in ("dynamic", "high_equity")
+        )
+        self.century_active_threshold_usd = century_active_threshold_usd
+        self.max_initial_stake_usd = max_initial_stake_usd
+        self.max_reversal_stake_usd = max_reversal_stake_usd
+        self.high_equity_reversal_multiplier = high_equity_reversal_multiplier
+        self.high_equity_initial_ratio = high_equity_initial_ratio
 
     def calculate_initial_budget(self, active_capital_usd: float) -> int:
         """Derives whole-dollar Initial order budget."""
@@ -71,6 +85,10 @@ class DynamicTradeBudgetCalculator:
                 return 5
             else:
                 return min(8, max(1, int(round(active_capital_usd * 0.15))))
+        elif self.enable_high_equity_transition and active_capital_usd > self.century_active_threshold_usd:
+            raw = active_capital_usd * self.high_equity_initial_ratio
+            rounded = round_half_up_to_whole_dollar(raw)
+            return max(1, min(int(self.max_initial_stake_usd), rounded))
         else:
             raw = active_capital_usd / 11.0
             return round_half_up_to_whole_dollar(raw)
@@ -83,6 +101,13 @@ class DynamicTradeBudgetCalculator:
             init_b = self.calculate_initial_budget(active_capital_usd)
             cap = int(math.floor(active_capital_usd * max_balance_pct))
             return max(int(round(init_b * 1.5)), min(25, cap))
+        elif self.enable_high_equity_transition and active_capital_usd > self.century_active_threshold_usd:
+            init_b = self.calculate_initial_budget(active_capital_usd)
+            raw = init_b * self.high_equity_reversal_multiplier
+            rounded = round_half_up_to_whole_dollar(raw)
+            balance_cap = int(math.floor(active_capital_usd * max_balance_pct))
+            effective_cap = min(int(self.max_reversal_stake_usd), balance_cap)
+            return max(init_b, min(effective_cap, rounded))
         else:
             raw = (active_capital_usd * 10.0) / 11.0
             return round_half_up_to_whole_dollar(raw)
@@ -178,10 +203,10 @@ class DynamicTradeBudgetCalculator:
             )
 
         # 5. Check free active funds sufficiency
-        if calc_budget > free_active + 1e-4:
+        if total_required > free_active + 1e-4:
             # If adaptive clamping is enabled, attempt to downsize whole-dollar budget to available free funds
             if allow_adaptive_clamping:
-                max_affordable = math.floor(free_active + 1e-4)
+                max_affordable = math.floor((free_active + 1e-4) / (1.0 + self.taker_fee_rate))
                 if max_affordable >= self.min_order_usd:
                     approved_budget = float(max_affordable)
                     clamped_fee = round(approved_budget * self.taker_fee_rate, 4)
