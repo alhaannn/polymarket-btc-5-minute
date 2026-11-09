@@ -249,6 +249,27 @@ class LiveExecutionEngine(ExecutionEngine):
                     self.on_order_rejected(order, msg)
                 return order
 
+        # Determine order side and share sizing
+        try:
+            from py_clob_client_v2.order_builder.constants import BUY, SELL
+        except ImportError:
+            from py_clob_client.order_builder.constants import BUY, SELL
+
+        side_str = BUY if order.action == "BUY" else SELL
+        size = round(order.usd_amount / order.price, 2)
+        if size <= 0:
+            size = 1.0
+
+        if side_str == BUY:
+            # Polymarket CLOB enforces a strict minimum floor of $1.00 USD on marketable BUY orders.
+            # Due to 2-decimal share rounding (e.g. $1.00 / 0.89 = 1.12 sh -> 1.12 * 0.89 = $0.9968),
+            # ensure size * price is strictly >= 1.00 USD by taking the ceiling to the next 0.01 share.
+            if round(size * order.price, 4) < 1.00:
+                import math
+                size = math.ceil((1.00 / order.price) * 100.0) / 100.0
+                order.usd_amount = round(size * order.price, 4)
+        order.shares = size
+
         # Pre-execution wallet balance check
         try:
             avail_bal = self.get_wallet_balance()
@@ -265,15 +286,8 @@ class LiveExecutionEngine(ExecutionEngine):
         try:
             try:
                 from py_clob_client_v2.clob_types import OrderArgs
-                from py_clob_client_v2.order_builder.constants import BUY, SELL
             except ImportError:
                 from py_clob_client.clob_types import OrderArgs
-                from py_clob_client.order_builder.constants import BUY, SELL
-
-            side_str = BUY if order.action == "BUY" else SELL
-            size = round(order.usd_amount / order.price, 2)
-            if size <= 0:
-                size = 1.0
 
             order_args = OrderArgs(
                 price=round(order.price, 3),
