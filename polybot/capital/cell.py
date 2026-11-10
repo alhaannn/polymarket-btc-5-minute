@@ -15,6 +15,15 @@ from typing import Any, Dict, List, Optional, Tuple
 log = logging.getLogger("polybot.capital.cell")
 
 
+class CellStatus:
+    ACTIVE = "ACTIVE"
+    TRIGGER_ZONE = "TRIGGER_ZONE"
+    POSITION_ACTIVE = "POSITION_ACTIVE"
+    REVERSAL_ACTIVE = "REVERSAL_ACTIVE"
+    HALTED_DEPLETED = "HALTED_DEPLETED"
+    TARGET_GRADUATED = "TARGET_GRADUATED"
+
+
 def round_half_up_int(val: float | decimal.Decimal) -> int:
     d = decimal.Decimal(str(val))
     return int(d.quantize(decimal.Decimal("1"), rounding=decimal.ROUND_HALF_UP))
