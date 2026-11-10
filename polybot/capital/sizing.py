@@ -89,6 +89,9 @@ class DynamicTradeBudgetCalculator:
             raw = active_capital_usd * self.high_equity_initial_ratio
             rounded = round_half_up_to_whole_dollar(raw)
             return max(1, min(int(self.max_initial_stake_usd), rounded))
+        elif self.sizing_mode == "dynamic":
+            raw = active_capital_usd / 11.0
+            return max(1, round_half_up_to_whole_dollar(raw)) if active_capital_usd >= self.min_order_usd else round_half_up_to_whole_dollar(raw)
         else:
             raw = active_capital_usd / 11.0
             return round_half_up_to_whole_dollar(raw)
@@ -108,6 +111,9 @@ class DynamicTradeBudgetCalculator:
             balance_cap = int(math.floor(active_capital_usd * max_balance_pct))
             effective_cap = min(int(self.max_reversal_stake_usd), balance_cap)
             return max(init_b, min(effective_cap, rounded))
+        elif self.sizing_mode == "dynamic":
+            raw = (active_capital_usd * 10.0) / 11.0
+            return max(1, round_half_up_to_whole_dollar(raw)) if active_capital_usd >= self.min_order_usd else round_half_up_to_whole_dollar(raw)
         else:
             raw = (active_capital_usd * 10.0) / 11.0
             return round_half_up_to_whole_dollar(raw)

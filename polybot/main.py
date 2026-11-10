@@ -310,11 +310,13 @@ async def run_paper(
                 dash_state.set_bot_status("PAUSED")
                 dash_state.add_log("CONTROL", f"{mode_label} PAUSED via dashboard control")
                 log.info("%s PAUSED via dashboard control", mode_label)
-            elif action in ("RESUME", "START"):
+            elif action in ("RESUME", "START", "UNHALT", "RESET_SHUTDOWN"):
                 is_paused = False
+                if capital_mgr:
+                    capital_mgr.reset_daily_shutdown()
                 dash_state.set_bot_status("RUNNING")
-                dash_state.add_log("CONTROL", f"{mode_label} RESUMED via dashboard control")
-                log.info("%s RESUMED via dashboard control", mode_label)
+                dash_state.add_log("CONTROL", f"{mode_label} RESUMED & UNHALTED via dashboard control")
+                log.info("%s RESUMED & UNHALTED via dashboard control", mode_label)
             elif action == "STOP":
                 dash_state.set_bot_status("STOPPED")
                 dash_state.add_log("CONTROL", f"{mode_label} STOPPED via dashboard control")

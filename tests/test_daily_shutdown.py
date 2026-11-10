@@ -326,3 +326,46 @@ def test_safe_cancellation_of_unfilled_pending_orders():
     assert len(engine.pending_orders) == 0
     assert o1.status == "CANCELLED"
     assert o2.status == "CANCELLED"
+
+
+def test_disable_daily_shutdown_environment_override(monkeypatch, tmp_ledger):
+    """When DISABLE_DAILY_SHUTDOWN=true, reversal failures do not trip the 12-hour cooling halt."""
+    monkeypatch.setenv("DISABLE_DAILY_SHUTDOWN", "true")
+    mgr = CapitalManager(ledger=tmp_ledger, starting_equity_usd=11.0)
+    day = "2026-11-01"
+
+    # Reversal trade failure occurs
+    mgr.process_settlement("rev-fail-bypass", -5.0, trading_day=day, signal_type="REVERSAL")
+    assert mgr.is_daily_shutdown_active(day) is False
+    assert mgr.state.daily_shutdown_status is False
+
+    # Budgets remain active
+    init_b, rev_b = mgr.get_trade_budgets(day)
+    assert init_b > 0
+    assert rev_b > 0
+
+
+def test_manual_reset_daily_shutdown_unhalting(tmp_ledger):
+    """Calling reset_daily_shutdown clears any active halt and unblocks budgets immediately."""
+    mgr = CapitalManager(ledger=tmp_ledger, starting_equity_usd=11.0)
+    day = "2026-11-01"
+
+    # Reversal trade failure triggers shutdown
+    mgr.process_settlement("rev-fail-1", -5.0, trading_day=day, signal_type="REVERSAL")
+    assert mgr.is_daily_shutdown_active(day) is True
+    init_b, rev_b = mgr.get_trade_budgets(day)
+    assert init_b == 0
+    assert rev_b == 0
+
+    # Execute manual reset
+    mgr.reset_daily_shutdown()
+    assert mgr.is_daily_shutdown_active(day) is False
+    assert mgr.state.daily_shutdown_status is False
+    assert mgr.state.shutdown_until_ts is None
+    assert mgr.state.active_shortfall_cents == 0
+
+    # Budgets are restored immediately
+    init_b2, rev_b2 = mgr.get_trade_budgets(day)
+    assert init_b2 > 0
+    assert rev_b2 > 0
+

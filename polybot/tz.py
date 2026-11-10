@@ -5,6 +5,7 @@ Ensures uniform time displays, log timestamps, and trading day attribution.
 from __future__ import annotations
 
 import datetime
+import os
 from typing import Any, Dict, List, Optional
 
 # Indian Standard Time (UTC+05:30)
@@ -74,7 +75,10 @@ def compute_schedule_state(
                 session_end_dt = (now_dt + datetime.timedelta(days=1)).replace(hour=1, minute=0, second=0, microsecond=0)
 
     # Daily shutdown / risk circuit-breaker override
-    is_shutdown = shutdown_active or (shutdown_until_ts is not None and shutdown_until_ts > now_ts)
+    if os.getenv("DISABLE_DAILY_SHUTDOWN", "false").lower() in ("true", "1", "yes"):
+        is_shutdown = False
+    else:
+        is_shutdown = shutdown_active or (shutdown_until_ts is not None and shutdown_until_ts > now_ts)
 
     if is_shutdown:
         status = "RESTING"

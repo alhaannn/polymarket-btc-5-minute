@@ -47,7 +47,12 @@ class CapitalManager:
         max_reversal_stake_usd: Optional[float] = None,
         high_equity_reversal_multiplier: Optional[float] = None,
         high_equity_initial_ratio: Optional[float] = None,
+        disable_daily_shutdown: Optional[bool] = None,
     ):
+        self.disable_daily_shutdown = (
+            disable_daily_shutdown if disable_daily_shutdown is not None
+            else (os.getenv("DISABLE_DAILY_SHUTDOWN", "false").lower() in ("true", "1", "yes"))
+        )
         self.sizing_mode = sizing_mode or os.getenv("SIZING_MODE", "canonical")
         self.enable_high_equity_transition = (
             enable_high_equity_transition if enable_high_equity_transition is not None
@@ -109,6 +114,8 @@ class CapitalManager:
         self.state.active_capital_cents = new_active_cents
         self.state.protected_capital_cents = new_prot_cents
         self.state.total_equity_cents = new_active_cents + new_prot_cents
+        if new_total_cents > 0:
+            self.state.active_shortfall_cents = 0
         self.state.updated_at_ts = time.time()
 
         now_ts = time.time()
@@ -228,7 +235,16 @@ class CapitalManager:
         """
         Returns True if the 12-hour reversal loss cooling halt is currently active.
         Automatically clears and resumes trading once 12 hours have passed.
+        If disabled via configuration, always returns False and clears active shutdown status.
         """
+        if getattr(self, "disable_daily_shutdown", False) or os.getenv("DISABLE_DAILY_SHUTDOWN", "false").lower() in ("true", "1", "yes"):
+            if self.state and self.state.daily_shutdown_status:
+                self.state.daily_shutdown_status = False
+                self.state.daily_shutdown_reason = ""
+                self.state.shutdown_until_ts = None
+                self.state.daily_failed_reversal_count = 0
+            return False
+
         self.check_day_rollover(current_trading_day, current_ts)
         now = current_ts if current_ts is not None else time.time()
 
@@ -239,6 +255,23 @@ class CapitalManager:
             return self.state.daily_shutdown_trading_day == today
 
         return False
+
+    def reset_daily_shutdown(self) -> None:
+        """
+        Manually clears daily shutdown / 12-hour cooling halt,
+        clearing shutdown flags, failure counts, and any active shortfall.
+        Persists the cleared state to ledger.
+        """
+        self.state.daily_shutdown_status = False
+        self.state.daily_shutdown_reason = ""
+        self.state.shutdown_until_ts = None
+        self.state.daily_failed_reversal_count = 0
+        self.state.daily_failed_initial_count = 0
+        self.state.active_shortfall_cents = 0
+        self.state.reconciliation_blocked = False
+        self.state.updated_at_ts = time.time()
+        self.ledger.save_state(self.state)
+        log.info("[DAILY_SHUTDOWN_RESET] Daily shutdown and cooling halt manually cleared. Trading unhalted.")
 
     def is_trading_blocked(self, current_trading_day: Optional[str] = None) -> Tuple[bool, str]:
         """
@@ -627,6 +660,10 @@ class CapitalManager:
         Records the reversal loss circuit breaker firing.
         Persists qualification for Option B next-day protected reserve activation.
         """
+        if getattr(self, "disable_daily_shutdown", False) or os.getenv("DISABLE_DAILY_SHUTDOWN", "false").lower() in ("true", "1", "yes"):
+            log.info("[DAILY_SHUTDOWN_DISABLED] 12-hour cooling halt skipped (daily shutdown disabled via configuration).")
+            return None
+
         event_id = f"shutdown-{trading_day}"
         self.state.daily_shutdown_status = True
         self.state.daily_shutdown_reason = reason
