@@ -258,32 +258,17 @@ class LiveExecutionEngine(ExecutionEngine):
         import math
         side_str = BUY if order.action == "BUY" else SELL
 
-        # Quantize share size to 2 decimal places (Polymarket share resolution)
-        if getattr(order, "shares", 0.0) > 0:
-            size = math.floor(float(order.shares) * 100.0) / 100.0
+        if side_str == BUY:
+            # Polymarket CLOB enforces a strict minimum floor of $1.00 USD on marketable BUY orders.
+            if order.usd_amount < 1.00:
+                order.usd_amount = 1.00
+            order.usd_amount = round(order.usd_amount, 2)
+            if order.price > 0:
+                order.shares = round(order.usd_amount / order.price, 4)
         else:
-            size = math.floor((float(order.usd_amount) / float(order.price)) * 100.0) / 100.0
-
-        if size <= 0:
-            size = 1.0
-
-        if side_str == BUY and (size * order.price) < 1.000000 - 1e-9:
-            # Polymarket CLOB enforces a strict minimum floor of $1.000000 USD on marketable BUY orders.
-            # Because py_clob_client_v2 computes makerAmount = round_down(size, 2) * price,
-            # any sub-cent shortfall (e.g. 1.09 * 0.910 = $0.9919 or 1.11 * 0.900 = $0.9990)
-            # causes an immediate HTTP 400 rejection: 'invalid amount for a marketable BUY order, min size: 1'.
-            # We strictly bump size by 0.01 shares until size * price is >= $1.000000 USD.
-            while (size * order.price) < 1.000000 - 1e-9:
-                size = round(size + 0.01, 2)
-            order.usd_amount = round(size * order.price, 4)
-
-        order.shares = size
-
-        # py_clob_client_v2.order_builder uses round_down(size, 2) which does floor(size * 100) / 100.
-        # Due to IEEE-754 binary floating-point representation, numbers like 1.13 * 100 evaluate to 112.99999999999999,
-        # which floors to 112 (1.12 shares, causing Polymarket 400 rejection).
-        # Adding 1e-6 float epsilon prevents this under-floor truncation when building the order args.
-        clob_size = round(size, 2) + 1e-6
+            order.shares = round(order.shares, 2)
+            if order.price > 0 and order.usd_amount <= 0:
+                order.usd_amount = round(order.shares * order.price, 4)
 
         # Pre-execution wallet balance check
         try:
@@ -300,36 +285,66 @@ class LiveExecutionEngine(ExecutionEngine):
 
         try:
             try:
-                from py_clob_client_v2.clob_types import OrderArgs, OrderType
+                from py_clob_client_v2.clob_types import MarketOrderArgs, OrderArgs, OrderType
             except ImportError:
-                from py_clob_client.clob_types import OrderArgs, OrderType
-
-            order_args = OrderArgs(
-                price=round(order.price, 3),
-                size=clob_size,
-                side=side_str,
-                token_id=order.token_id,
-            )
-
-            log.info(
-                "[LIVE_ORDER_POSTING] Submitting to CLOB: side=%s token=%s price=%.3f size=%.2f ($%.2f)",
-                side_str, order.token_id, order.price, order.shares, order.usd_amount
-            )
-
-            clob_order_type = OrderType.FAK if order.order_type == "taker" else OrderType.GTC
-            try:
-                resp = self.clob_client.create_and_post_order(order_args, order_type=clob_order_type)
-            except TypeError:
                 try:
-                    resp = self.clob_client.create_and_post_order(order_args)
+                    from py_clob_client.clob_types import MarketOrderArgs, OrderArgs, OrderType
+                except ImportError:
+                    from py_clob_client.clob_types import OrderArgs, OrderType
+                    MarketOrderArgs = None
+
+            resp = None
+            is_taker = getattr(order, "order_type", "taker") == "taker"
+
+            # 1. Preferred path: use native MarketOrderArgs with FAK for taker snipe orders.
+            # In Polymarket CLOB, market BUY orders require makerAmount to have at most 2 decimals (exact cents in USDC),
+            # and takerAmount up to 4 decimals (shares). MarketOrderArgs accepts dollar cash budget for BUY
+            # and correctly formats maker/taker token decimals to satisfy exchange precision validators.
+            if is_taker and MarketOrderArgs is not None and hasattr(self.clob_client, "create_and_post_market_order"):
+                market_amount = round(order.usd_amount, 2) if side_str == BUY else round(order.shares, 2)
+                if side_str == BUY and market_amount < 1.00:
+                    market_amount = 1.00
+                market_args = MarketOrderArgs(
+                    token_id=order.token_id,
+                    amount=market_amount,
+                    side=side_str,
+                    price=round(order.price, 3),
+                    order_type=OrderType.FAK,
+                )
+                log.info(
+                    "[LIVE_MARKET_ORDER_POSTING] Submitting FAK market order: side=%s token=%s price=%.3f amount=%.2f (%s)",
+                    side_str, order.token_id, order.price, market_amount, "USD" if side_str == BUY else "shares"
+                )
+                resp = self.clob_client.create_and_post_market_order(market_args, order_type=OrderType.FAK)
+
+            # 2. Limit order path (GTC maker or fallback when client lacks create_and_post_market_order)
+            if resp is None:
+                clob_size = round(order.shares, 2) + 1e-6
+                order_args = OrderArgs(
+                    price=round(order.price, 3),
+                    size=clob_size,
+                    side=side_str,
+                    token_id=order.token_id,
+                )
+                log.info(
+                    "[LIVE_LIMIT_ORDER_POSTING] Submitting order: side=%s token=%s price=%.3f size=%.2f ($%.2f)",
+                    side_str, order.token_id, order.price, order.shares, order.usd_amount
+                )
+                clob_order_type = OrderType.GTC
+                try:
+                    resp = self.clob_client.create_and_post_order(order_args, order_type=clob_order_type)
                 except TypeError:
-                    resp = self.clob_client.create_and_post_order(
-                        token_id=order.token_id,
-                        price=round(order.price, 3),
-                        side=side_str,
-                        size=size,
-                        order_type=order.order_type,
-                    )
+                    try:
+                        resp = self.clob_client.create_and_post_order(order_args)
+                    except TypeError:
+                        resp = self.clob_client.create_and_post_order(
+                            token_id=order.token_id,
+                            price=round(order.price, 3),
+                            side=side_str,
+                            size=order.shares,
+                            order_type=order.order_type,
+                        )
+
             log.info("[LIVE_ORDER_RESPONSE] %s", resp)
 
             order_id = resp.get("orderID") or resp.get("order_id") if isinstance(resp, dict) else None
@@ -341,6 +356,21 @@ class LiveExecutionEngine(ExecutionEngine):
             order.order_id = order_id or f"live-{int(time.time() * 1000)}"
             order.status = "FILLED"
 
+            # Parse exact filled taking/making amounts if provided
+            if isinstance(resp, dict):
+                taking_amt = float(resp.get("takingAmount") or resp.get("taking_amount") or 0.0)
+                making_amt = float(resp.get("makingAmount") or resp.get("making_amount") or 0.0)
+                if side_str == BUY:
+                    if taking_amt > 0:
+                        order.shares = taking_amt
+                    if making_amt > 0:
+                        order.usd_amount = making_amt
+                elif side_str == SELL:
+                    if making_amt > 0:
+                        order.shares = making_amt
+                    if taking_amt > 0:
+                        order.usd_amount = taking_amt
+
             fee_usd = calculate_fee(order.usd_amount, self.fee_schedule.taker_rate)
             now_ts = time.time()
             fill = Fill(
@@ -350,7 +380,7 @@ class LiveExecutionEngine(ExecutionEngine):
                 side=order.side,
                 action=order.action,
                 price=order.price,
-                shares=size,
+                shares=order.shares,
                 cost_usd=order.usd_amount,
                 fee_usd=fee_usd,
                 filled_at_ts=now_ts,
