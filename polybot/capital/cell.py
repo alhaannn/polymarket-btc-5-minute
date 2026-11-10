@@ -185,6 +185,18 @@ class MarketCell:
             self.asset.upper(),
         )
 
+    def record_trade_result(self, pnl_usd: float, is_reversal: bool = False) -> None:
+        """Helper to record either a win or loss given PnL in USD."""
+        pnl_cents = round_half_up_int(pnl_usd * 100.0)
+        if pnl_cents >= 0:
+            self.record_win(pnl_cents)
+        else:
+            loss_cents = abs(pnl_cents)
+            if is_reversal:
+                self.record_reversal_loss(loss_cents)
+            else:
+                self.record_initial_loss(loss_cents)
+
     def revive(self, grant_cents: int = 1200) -> None:
         """Revives a halted cell with a grant from a winning market."""
         self.capital_cents = grant_cents
@@ -273,6 +285,10 @@ class MarketCellManager:
     @property
     def halted_cells_count(self) -> int:
         return len(self.halted_cells)
+
+    def check_and_trigger_harvest(self, winning_asset: str) -> Optional[HarvestEvent]:
+        """Alias for check_and_execute_harvest."""
+        return self.check_and_execute_harvest(winning_asset)
 
     def check_and_execute_harvest(self, winning_asset: str) -> Optional[HarvestEvent]:
         """
