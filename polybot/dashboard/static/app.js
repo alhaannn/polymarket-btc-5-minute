@@ -570,8 +570,20 @@ function renderState(state) {
     renderCapital(state.capital);
   }
 
-  // 8. Multi-Market Fleet & Grid Rendering
-  if (state.multi_market) {
+  // 8. Multi-Market Fleet & Grid Rendering (Paper Mode Only)
+  const isLive = state.execution_mode === 'live' || state.is_live;
+  const mmSections = [
+    document.getElementById('card-mm-fleet-banner'),
+    document.getElementById('section-mm-grid'),
+    document.getElementById('card-mm-asset-ledger'),
+    document.getElementById('card-mm-sweeper-ledger')
+  ];
+  const showMultiMarket = !isLive && !!state.multi_market;
+  mmSections.forEach(el => {
+    if (el) el.style.display = showMultiMarket ? '' : 'none';
+  });
+
+  if (showMultiMarket) {
     renderMultiMarket(state.multi_market);
   }
 }
