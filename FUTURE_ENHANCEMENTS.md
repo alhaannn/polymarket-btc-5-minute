@@ -271,6 +271,73 @@ To maximize compounding velocity while maintaining institutional liquidity safet
 
 ---
 
+### 5. High-Equity Chunking Architecture (Iceberg Slicing Engine)
+
+#### The Problem: The Single Large Sweep Trap ($455 Reversal at $500 Equity)
+At larger accounts ($500+ equity), placing a single taker order of **$455.00 (~520 shares)** in one block causes severe execution breakdown:
+* Sweeps through 6+ levels of the orderbook.
+* Drives average execution price from $0.875 up to $0.930+ (**>3.5% slippage**).
+* Hits the `MAX_SLIPPAGE = 1.5%` filter in `polybot/filters.py` and gets rejected.
+
+#### The Solution: Iceberg Taker Slicing (Micro-TWAP)
+Instead of firing one single massive $455 order, the execution engine slices the total stake into smaller, bite-sized **liquidity chunks**:
+
+$$\text{Chunk Size: } C = \min\left(\$90.00, \frac{\text{Total Stake}}{N}\right) \implies 5 \text{ chunks of } \$91.00$$
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Bot as Polybot Execution Engine
+    participant CLOB as Polymarket CLOB Book
+    participant MM as Automated Market Makers
+
+    Note over Bot,MM: Target Reversal Stake = $455.00 (Divided into 5 x $91 Chunks)
+    
+    Bot->>CLOB: Submit Chunk 1 ($91.00 @ max 0.880)
+    CLOB-->>Bot: Fill 104 shares @ avg 0.873 (Level 1-2 swept)
+    Note over CLOB,MM: Book Level 1 depleted.
+    MM->>CLOB: MM Quoting Loop Refills Level 1 (500ms - 1.5s reload)
+    
+    Bot->>CLOB: Submit Chunk 2 ($91.00 @ max 0.880)
+    CLOB-->>Bot: Fill 104 shares @ avg 0.875 (Level 1 reloaded)
+    MM->>CLOB: MM Quoting Loop Refills Level 1
+    
+    Bot->>CLOB: Submit Chunk 3 ($91.00 @ max 0.880)
+    CLOB-->>Bot: Fill 103 shares @ avg 0.878
+    MM->>CLOB: MM Quoting Loop Refills Level 1
+    
+    Bot->>CLOB: Submit Chunk 4 & 5 ($91.00 each)
+    CLOB-->>Bot: All Chunks Filled!
+    Note over Bot: Total 520 shares filled @ avg $0.876 (Slippage < 0.4%!)
+```
+
+#### Why Chunking is Exceptionally Effective on Polymarket CLOB:
+1. **Automated Market Maker (MM) Reload Cycle:**
+   * Market makers on Polymarket (e.g. Wintermute, automated liquidity bots) run sub-second quoting loops.
+   * When Level 1 is swept, their hedging algorithms re-quote fresh size at fair value within **500ms to 1.5 seconds**.
+   * By spacing chunks **1.0s to 2.0s apart**, the bot allows the book to replenish at the best ask before taking the next slice, converting a massive 3.5% sweep into a smooth, low-impact fill (<0.5% slippage)!
+2. **Zero Additional Fee Penalty:**
+   * Polymarket CLOB uses off-chain EIP-712 gasless matching settled via Polygon CTF Exchange.
+   * 5 sub-orders of $91 cost **$0.00 in gas** and incur the **exact same percentage taker fee** (0.1% or 0%) as a single $455 order.
+3. **Execution Window Feasibility:**
+   * The Reversal window opens at $t = 180\text{s}$ and runs until $t = 270\text{s}$ (a 90-second operational window).
+   * Executing 5 chunks spaced 1.5 seconds apart takes **only 7.5 seconds total**, easily finishing well before the window ends.
+4. **Adaptive Circuit Breakers per Chunk:**
+   * **Price Ceiling Guard:** If the price spikes above the Reversal ceiling ($0.930) mid-execution, remaining chunks are cleanly cancelled.
+   * **Adverse Drift Guard:** If the market momentum suddenly flips, the algorithm stops firing subsequent chunks, preventing full exposure.
+   * **Partial Fill Handling:** If 3 out of 5 chunks fill ($273 hedged), the position is registered as a partial recovery hedge without error or deadlock.
+
+#### Planned Chunking Configuration Parameters:
+```python
+ENABLE_TAKER_CHUNKING: bool = True           # Engages when stake > $100
+MAX_CHUNK_SIZE_USD: float = 75.0             # Max size per single taker slice ($75-$100)
+CHUNK_INTERVAL_SEC: float = 1.5              # Pause between slices to allow MM refill
+CHUNK_MAX_SLIPPAGE: float = 0.012            # 1.2% max allowable slippage per chunk
+CHUNK_PRICE_CEILING: float = 0.930           # Immediate abort if book exceeds ceiling
+```
+
+---
+
 ## 🖥️ Complete Redesign of the Paper Dashboard (`https://alphora.duckdns.org/paper/`)
 
 The workstation will be transformed from a single-asset monitor into an **Enterprise-Grade 6-Market Multi-Asset Command Center**:
