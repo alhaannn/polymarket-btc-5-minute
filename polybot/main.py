@@ -289,8 +289,6 @@ async def run_paper(
             it for it in open_trades_to_settle
             if it.get("order_id") != rej_order.order_id
         ]
-            if it.get("order_id") != rej_order.order_id
-        ]
         dash_state.add_log("REJECTED", f"{rej_order.signal_type} fill rejected: {reason}")
         log.warning("[ORDER_REJECTED_CALLBACK] %s fill rejected (%s) - state unlatched", rej_order.signal_type, reason)
 
