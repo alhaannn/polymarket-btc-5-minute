@@ -7,7 +7,7 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Optional
 
 import websockets
 
@@ -20,7 +20,7 @@ class BinanceFeed:
     def __init__(
         self,
         ws_url: Optional[str] = None,
-        symbols: Optional[List[str]] = None,
+        symbols: Optional[list[str]] = None,
         initial_reconnect_delay: float = 1.0,
         max_reconnect_delay: float = 30.0,
         on_tick: Optional[Callable[[Dict[str, Any]], None]] = None,

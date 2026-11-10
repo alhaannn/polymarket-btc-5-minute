@@ -217,15 +217,23 @@ async def run_paper(
         )
         await dash_server.start()
 
-    if config.strategy.strategy_name == "legacy":
-        strat = LegacyStrategy(config.strategy)
-    elif config.strategy.strategy_name == "reversal":
-        strat = ReversalStrategy(config.strategy)
-    else:
-        strat = EdgeStrategy(config.strategy)
+    # STRICT PRODUCTION RULE: Live mode is strictly isolated to BTC!
+    # Paper Mode enables full 6-market multi-asset parallel execution.
+    monitored_assets: List[str] = ["btc"] if is_live else ["btc", "eth", "sol", "doge", "xrp", "bnb"]
+
+    strategies: Dict[str, Any] = {}
+    for a in monitored_assets:
+        if config.strategy.strategy_name == "legacy":
+            strategies[a] = LegacyStrategy(config.strategy)
+        elif config.strategy.strategy_name == "reversal":
+            strategies[a] = ReversalStrategy(config.strategy)
+        else:
+            strategies[a] = EdgeStrategy(config.strategy)
+    strat = strategies["btc"]
 
     from polybot.multi_market import MultiMarketOrchestrator
-    multi_orch = MultiMarketOrchestrator()
+    from polybot.capital.cell import CellStatus
+    multi_orch = MultiMarketOrchestrator(assets=monitored_assets)
     dash_state.update_multi_market(multi_orch.get_matrix_snapshot())
 
     rtds = None
@@ -234,8 +242,8 @@ async def run_paper(
 
     if demo:
         log.info("DEMO MODE ENABLED: Simulating 5-minute market cycles and probability swings for live UI workstation testing.")
-        dash_state.add_log("INFO", "Demo simulation active: realistic 5m cycle, initial + reversal triggers")
-        clob.track_tokens({"Up": "demo-up", "Down": "demo-down"})
+        dash_state.add_log("INFO", f"Demo simulation active across {len(monitored_assets)} markets: {', '.join(monitored_assets).upper()}")
+        clob.track_multi_tokens({a: {"Up": f"demo-{a}-up", "Down": f"demo-{a}-down"} for a in monitored_assets})
     else:
         rtds = RTDSFeed(
             ws_url=config.feeds.rtds_ws_url,
@@ -259,6 +267,8 @@ async def run_paper(
 
     current_window_start: Optional[int] = None
     current_tokens: Optional[Dict[str, str]] = None
+    discovered_markets: Dict[str, Dict[str, Any]] = {}
+    discovered_tokens: Dict[str, Dict[str, str]] = {}
     last_discovery_attempt_ts = 0.0
     open_trades_to_settle: List[Dict[str, Any]] = []
     # is_paused already determined above from config/args/env
@@ -266,13 +276,19 @@ async def run_paper(
     last_balance_poll_ts = 0.0
 
     def handle_order_rejected(rej_order: Order, reason: str):
-        if hasattr(strat, "on_order_rejected"):
-            strat.on_order_rejected(rej_order.signal_type, cooldown_sec=1.0, current_ts=time.time())
+        rej_asset = rej_order.slug.split("-")[0].lower() if "-" in rej_order.slug else "btc"
+        s = strategies.get(rej_asset, strat)
+        if hasattr(s, "on_order_rejected"):
+            s.on_order_rejected(rej_order.signal_type, cooldown_sec=1.0, current_ts=time.time())
+        if not is_live:
+            multi_orch.arbiter.release(rej_asset)
         if hasattr(risk, "record_trade_rejected"):
             risk.record_trade_rejected(rej_order.usd_amount)
         nonlocal open_trades_to_settle
         open_trades_to_settle = [
             it for it in open_trades_to_settle
+            if it.get("order_id") != rej_order.order_id
+        ]
             if it.get("order_id") != rej_order.order_id
         ]
         dash_state.add_log("REJECTED", f"{rej_order.signal_type} fill rejected: {reason}")
@@ -348,47 +364,97 @@ async def run_paper(
             if current_window_start != window_start:
                 current_window_start = window_start
                 current_tokens = None
-                K_val = health.chainlink.last_price
-                strat.reset_window(window_start, K_val)
+                discovered_markets.clear()
+                discovered_tokens.clear()
+                for a in monitored_assets:
+                    cur_k = multi_orch.trackers[a].strike_k or multi_orch.trackers[a].spot_p
+                    if a == "btc" and health.chainlink.last_price:
+                        cur_k = health.chainlink.last_price
+                    strategies[a].reset_window(window_start, cur_k)
 
             # Market discovery (demo or live)
             if demo:
-                if not current_tokens:
-                    current_tokens = {"Up": "demo-up", "Down": "demo-down"}
-                    clob.track_tokens(current_tokens)
-                    K_val = 68500.0
-                    strat.reset_window(window_start, K_val)
-                    health.record_tick("chainlink", K_val, int(now * 1000))
-                    health.record_tick("binance", K_val, int(now * 1000))
-                    dash_state.add_log("INFO", f"Demo rollover into window {window_start} (strike K=${K_val:,.2f})")
-                    log.info("Demo rollover window %d: strike K=$%.2f", window_start, K_val)
+                if not discovered_tokens:
+                    for a in monitored_assets:
+                        discovered_tokens[a] = {"Up": f"demo-{a}-up", "Down": f"demo-{a}-down"}
+                        multi_orch.trackers[a].update_market_info({
+                            "slug": f"{a}-updown-5m-{window_start}",
+                            "tokens": discovered_tokens[a],
+                        })
+                        base_k = 68500.0 if a == "btc" else (multi_orch.trackers[a].strike_k or 100.0)
+                        strategies[a].reset_window(window_start, base_k)
+                        dash_state.add_log("INFO", f"[{a.upper()}] Demo rollover into window {window_start}")
+                    current_tokens = discovered_tokens.get("btc")
+                    clob.track_multi_tokens(discovered_tokens)
+                    log.info("Demo rollover window %d for assets: %s", window_start, list(discovered_tokens.keys()))
             else:
-                # Live network feeds: If tokens not yet discovered, attempt lookup (throttled every 2s)
-                if not current_tokens and (now - last_discovery_attempt_ts > 2.0):
-                    last_discovery_attempt_ts = now
-                    try:
-                        m_info = await asyncio.wait_for(
-                            asyncio.to_thread(client.get_market, window_start),
-                            timeout=2.0
-                        )
-                    except Exception as exc:
-                        m_info = None
-                        log.debug("Market discovery timed out for %s: %s", current_slug, exc)
-
-                    if m_info and m_info.get("tokens"):
-                        current_tokens = m_info["tokens"]
-                        clob.track_tokens(current_tokens)
-                        K_val = health.chainlink.last_price
-                        strat.reset_window(window_start, K_val)
-                        dash_state.add_log("INFO", f"Discovered market {current_slug} tokens")
-                        log.info("Market %d discovered: strike K=%s, tokens=%s", window_start, f"${K_val:.2f}" if K_val else "pending", current_tokens)
-                        # Immediately take initial REST snapshot so books are primed instantly!
+                if is_live:
+                    # STRICT LIVE TRADING: Only discover BTC
+                    if not current_tokens and (now - last_discovery_attempt_ts > 2.0):
+                        last_discovery_attempt_ts = now
                         try:
-                            await asyncio.wait_for(asyncio.to_thread(clob.poll_rest_fallback), timeout=2.0)
-                        except Exception:
-                            pass
-                    else:
-                        dash_state.add_log("WARN", f"Market lookup pending for {current_slug} (retrying in 2s)")
+                            m_info = await asyncio.wait_for(
+                                asyncio.to_thread(client.get_market, window_start, asset="btc"),
+                                timeout=2.0
+                            )
+                        except Exception as exc:
+                            m_info = None
+                            log.debug("Market discovery timed out for %s: %s", current_slug, exc)
+
+                        if m_info and m_info.get("tokens"):
+                            current_tokens = m_info["tokens"]
+                            discovered_tokens["btc"] = current_tokens
+                            discovered_markets["btc"] = m_info
+                            clob.track_tokens(current_tokens)
+                            K_val = health.chainlink.last_price
+                            strat.reset_window(window_start, K_val)
+                            dash_state.add_log("INFO", f"Discovered market {current_slug} tokens")
+                            log.info("Market %d discovered: strike K=%s, tokens=%s", window_start, f"${K_val:.2f}" if K_val else "pending", current_tokens)
+                            try:
+                                await asyncio.wait_for(asyncio.to_thread(clob.poll_rest_fallback), timeout=2.0)
+                            except Exception:
+                                pass
+                        else:
+                            dash_state.add_log("WARN", f"Market lookup pending for {current_slug} (retrying in 2s)")
+                else:
+                    # PAPER MODE: Multi-Market Discovery across all monitored assets
+                    missing_assets = [a for a in monitored_assets if a not in discovered_markets]
+                    if missing_assets and (now - last_discovery_attempt_ts > 2.0):
+                        last_discovery_attempt_ts = now
+                        try:
+                            m_dict = await asyncio.wait_for(
+                                asyncio.to_thread(client.get_multi_markets, window_start, missing_assets),
+                                timeout=3.0
+                            )
+                        except Exception as exc:
+                            m_dict = {}
+                            log.debug("Multi-market discovery timeout for %s: %s", missing_assets, exc)
+
+                        if m_dict:
+                            updated_any = False
+                            for a, m_info in m_dict.items():
+                                if m_info and m_info.get("tokens"):
+                                    discovered_markets[a] = m_info
+                                    discovered_tokens[a] = m_info["tokens"]
+                                    multi_orch.trackers[a].update_market_info(m_info)
+                                    cur_spot = multi_orch.trackers[a].spot_p or (health.chainlink.last_price if a == "btc" else None)
+                                    if cur_spot and cur_spot > 0 and multi_orch.trackers[a].strike_k is None:
+                                        multi_orch.trackers[a].strike_k = cur_spot
+                                    strategies[a].reset_window(window_start, multi_orch.trackers[a].strike_k)
+                                    dash_state.add_log("INFO", f"[{a.upper()}] Discovered market {m_info['slug']} tokens")
+                                    log.info("[%s] Market %d discovered: strike K=%s, tokens=%s",
+                                             a.upper(), window_start,
+                                             f"${multi_orch.trackers[a].strike_k:.2f}" if multi_orch.trackers[a].strike_k else "pending",
+                                             m_info["tokens"])
+                                    updated_any = True
+
+                            if updated_any:
+                                current_tokens = discovered_tokens.get("btc")
+                                clob.track_multi_tokens(discovered_tokens)
+                                try:
+                                    await asyncio.wait_for(asyncio.to_thread(clob.poll_rest_fallback), timeout=2.0)
+                                except Exception:
+                                    pass
 
             # In Demo mode, simulate price & probability curves
             if demo:
@@ -418,14 +484,22 @@ async def run_paper(
                 health.record_tick("chainlink", cur_btc, int(now * 1000))
                 health.record_tick("binance", cur_btc, int(now * 1000))
 
-                clob.books["demo-up"].apply_snapshot(
-                    [{"price": round(up_p - 0.01, 3), "size": 500}],
-                    [{"price": round(up_p, 3), "size": 500}]
-                )
-                clob.books["demo-down"].apply_snapshot(
-                    [{"price": round(down_p - 0.01, 3), "size": 500}],
-                    [{"price": round(down_p, 3), "size": 500}]
-                )
+                for a in monitored_assets:
+                    tr = multi_orch.trackers[a]
+                    up_p_a = tr.up_prob / 100.0
+                    down_p_a = tr.down_prob / 100.0
+                    u_tid = discovered_tokens.get(a, {}).get("Up", f"demo-{a}-up")
+                    d_tid = discovered_tokens.get(a, {}).get("Down", f"demo-{a}-down")
+                    if u_tid in clob.books:
+                        clob.books[u_tid].apply_snapshot(
+                            [{"price": round(up_p_a - 0.01, 3), "size": 500}],
+                            [{"price": round(up_p_a, 3), "size": 500}]
+                        )
+                    if d_tid in clob.books:
+                        clob.books[d_tid].apply_snapshot(
+                            [{"price": round(down_p_a - 0.01, 3), "size": 500}],
+                            [{"price": round(down_p_a, 3), "size": 500}]
+                        )
 
                 # Update 6-Market Matrix Tracker in Demo Mode
                 multi_orch.trackers["btc"].strike_k = base_k
@@ -519,10 +593,20 @@ async def run_paper(
             )
 
             # Extract book state using effective best ask/bid (including prediction market complement)
-            up_ask = clob.get_effective_ask("Up")
-            down_ask = clob.get_effective_ask("Down")
-            up_bid = clob.get_effective_bid("Up")
-            down_bid = clob.get_effective_bid("Down")
+            if not is_live:
+                for a in monitored_assets:
+                    up_a = clob.get_effective_ask("Up", asset=a)
+                    down_a = clob.get_effective_ask("Down", asset=a)
+                    up_b_a = clob.get_effective_bid("Up", asset=a)
+                    down_b_a = clob.get_effective_bid("Down", asset=a)
+                    if not demo and up_a is not None and down_a is not None:
+                        multi_orch.trackers[a].update_book(up_a, down_a, up_b_a, down_b_a)
+                        multi_orch.trackers[a].update_probabilities(up_a * 100.0, down_a * 100.0)
+
+            up_ask = clob.get_effective_ask("Up", asset="btc") or clob.get_effective_ask("Up")
+            down_ask = clob.get_effective_ask("Down", asset="btc") or clob.get_effective_ask("Down")
+            up_bid = clob.get_effective_bid("Up", asset="btc") or clob.get_effective_bid("Up")
+            down_bid = clob.get_effective_bid("Down", asset="btc") or clob.get_effective_bid("Down")
 
             # Check if order books are empty or stale (>1.5s since last tick); if so, poll REST fallback
             if not demo and clob._subscribed_tokens:
@@ -537,10 +621,10 @@ async def run_paper(
                     last_rest_poll_ts = now
                     try:
                         await asyncio.wait_for(asyncio.to_thread(clob.poll_rest_fallback), timeout=1.5)
-                        up_ask = clob.get_effective_ask("Up")
-                        down_ask = clob.get_effective_ask("Down")
-                        up_bid = clob.get_effective_bid("Up")
-                        down_bid = clob.get_effective_bid("Down")
+                        up_ask = clob.get_effective_ask("Up", asset="btc") or clob.get_effective_ask("Up")
+                        down_ask = clob.get_effective_ask("Down", asset="btc") or clob.get_effective_ask("Down")
+                        up_bid = clob.get_effective_bid("Up", asset="btc") or clob.get_effective_bid("Up")
+                        down_bid = clob.get_effective_bid("Down", asset="btc") or clob.get_effective_bid("Down")
                     except Exception:
                         pass
 
@@ -573,156 +657,243 @@ async def run_paper(
                     initial_side=strat.initial_side,
                 )
 
-            # Check for trade signal if not paused (passing side_books)
+            # Check for trade signal if not paused
             if not is_paused:
-                cur_price = health.chainlink.last_price or 0.0
-
-                # Check Option B Reserve Release for new trading day (Roadmap Phase 6)
                 today = ist_today_str()
+                # Check Option B Reserve Release for new trading day (Roadmap Phase 6)
                 activated, released_usd, _ = capital_mgr.check_and_activate_next_day_reserve(today)
                 if activated:
                     dash_state.add_log("RESERVE", f"Option B Reserve Release: +${released_usd:.2f} active funds released for {today}")
                     dash_state.update_capital(capital_mgr.state.to_dict())
                     log.info("Option B Reserve Release executed for %s: +$%.2f into active capital", today, released_usd)
 
-                if isinstance(strat, ReversalStrategy):
-                    init_b, rev_b = budget_calc.get_budgets(capital_mgr.state.active_capital)
-                    open_exp = engine.get_open_exposure()
-                    if strat.initial_order_placed or open_exp > 0:
-                        exec_rev = budget_calc.get_executable_reversal_budget(
-                            capital_mgr.state.active_capital,
-                            open_exposure_usd=open_exp,
-                        )
-                        if exec_rev >= budget_calc.min_order_usd:
-                            rev_b = exec_rev
-                    strat.set_dynamic_budgets(init_b, rev_b)
+                if is_live:
+                    # STRICT LIVE TRADING: ONLY BTC!
+                    cur_price = health.chainlink.last_price or 0.0
+                    if isinstance(strat, ReversalStrategy):
+                        init_b, rev_b = budget_calc.get_budgets(capital_mgr.state.active_capital)
+                        open_exp = engine.get_open_exposure()
+                        if strat.initial_order_placed or open_exp > 0:
+                            exec_rev = budget_calc.get_executable_reversal_budget(
+                                capital_mgr.state.active_capital,
+                                open_exposure_usd=open_exp,
+                            )
+                            if exec_rev >= budget_calc.min_order_usd:
+                                rev_b = exec_rev
+                        strat.set_dynamic_budgets(init_b, rev_b)
 
-                sig = strat.on_tick(cur_price, now, clob.side_books, health)
-                if sig:
-                    if sig.action == "SELL":
-                        tok_id = current_tokens.get(sig.side) if current_tokens else None
-                        order = Order(
-                            order_id=f"live-{int(now * 1000)}" if is_live else f"paper-{int(now * 1000)}",
-                            slug=sig.slug,
-                            side=sig.side,
-                            action=sig.action,
-                            order_type=sig.order_type,
-                            price=sig.price,
-                            usd_amount=sig.cost_usd,
-                            shares=sig.shares,
-                            created_at_ts=now,
-                            latency_ms=config.strategy.latency_ms,
+                    sig = strat.on_tick(cur_price, now, clob.side_books, health)
+                    if sig:
+                        if sig.action == "SELL":
+                            tok_id = current_tokens.get(sig.side) if current_tokens else None
+                            order = Order(
+                                order_id=f"live-{int(now * 1000)}",
+                                slug=sig.slug,
+                                side=sig.side,
+                                action=sig.action,
+                                order_type=sig.order_type,
+                                price=sig.price,
+                                usd_amount=sig.cost_usd,
+                                shares=sig.shares,
+                                created_at_ts=now,
+                                latency_ms=config.strategy.latency_ms,
+                                signal_type=sig.signal_type,
+                                linked_order_id=sig.linked_order_id,
+                                trigger_prob=sig.trigger_prob,
+                                counterpart_prob=sig.counterpart_prob,
+                                data_receipt_ts=sig.data_receipt_ts,
+                                token_id=tok_id,
+                            )
+                            engine.submit_order(order)
+                            dash_state.add_log(
+                                "EARLY_EXIT",
+                                f"Early exit sell placed: {order.order_id} ({sig.side} {sig.shares:.2f} shs @ ${sig.price:.3f})"
+                            )
+                            continue
+
+                        stake_usd = sig.cost_usd
+                        risk.sync_open_exposure(engine.get_open_exposure())
+
+                        today = ist_today_str()
+                        if capital_mgr.is_daily_shutdown_active(today):
+                            if hasattr(strat, "on_order_rejected"):
+                                strat.on_order_rejected(sig.signal_type, cooldown_sec=3.0, current_ts=now)
+                            log.warning("Order blocked: Daily shutdown active for %s (%s)", today, capital_mgr.state.daily_shutdown_reason)
+                            dash_state.add_log("SHUTDOWN", f"Daily shutdown active: {capital_mgr.state.daily_shutdown_reason}")
+                            continue
+
+                        if capital_mgr.state.active_shortfall_cents > 0:
+                            if hasattr(strat, "on_order_rejected"):
+                                strat.on_order_rejected(sig.signal_type, cooldown_sec=3.0, current_ts=now)
+                            log.warning("Order blocked: Active shortfall ($%.2f) exists. Trading halted.", capital_mgr.state.active_shortfall)
+                            dash_state.add_log("WARNING", f"Shortfall halt: ${capital_mgr.state.active_shortfall:.2f}")
+                            continue
+
+                        b_val = budget_calc.validate_order_budget(
                             signal_type=sig.signal_type,
-                            linked_order_id=sig.linked_order_id,
-                            trigger_prob=sig.trigger_prob,
-                            counterpart_prob=sig.counterpart_prob,
-                            data_receipt_ts=sig.data_receipt_ts,
-                            token_id=tok_id,
+                            active_capital_usd=capital_mgr.state.active_capital,
+                            open_exposure_usd=engine.get_open_exposure(),
+                            override_budget_usd=sig.cost_usd,
+                            allow_adaptive_clamping=True,
                         )
-                        engine.submit_order(order)
-                        dash_state.add_log(
-                            "EARLY_EXIT",
-                            f"Early exit sell placed: {order.order_id} ({sig.side} {sig.shares:.2f} shs @ ${sig.price:.3f})"
+                        if not b_val.allowed:
+                            if hasattr(strat, "on_order_rejected"):
+                                strat.on_order_rejected(sig.signal_type, cooldown_sec=3.0, current_ts=now)
+                            log.warning("[ORDER_BUDGET_REJECTED] %s: %s", sig.signal_type, b_val.reason)
+                            dash_state.add_log("REJECTED", f"Order budget blocked ({sig.signal_type}): {b_val.reason}")
+                            continue
+
+                        if b_val.approved_budget_usd > 0 and b_val.approved_budget_usd < stake_usd:
+                            scale = b_val.approved_budget_usd / stake_usd
+                            stake_usd = b_val.approved_budget_usd
+                            sig.shares = round(sig.shares * scale, 4)
+                            sig.cost_usd = stake_usd
+
+                        allowed, reason = risk.check_trade_allowed(
+                            stake_usd, current_window_idx, active_capital_usd=capital_mgr.state.active_capital
                         )
-                        continue
+                        if allowed:
+                            tok_id = current_tokens.get(sig.side) if current_tokens else None
+                            order = Order(
+                                order_id=f"live-{int(now * 1000)}",
+                                slug=sig.slug,
+                                side=sig.side,
+                                action=sig.action,
+                                order_type=sig.order_type,
+                                price=sig.price,
+                                usd_amount=stake_usd,
+                                shares=sig.shares,
+                                created_at_ts=now,
+                                latency_ms=config.strategy.latency_ms,
+                                signal_type=sig.signal_type,
+                                linked_order_id=sig.linked_order_id,
+                                trigger_prob=sig.trigger_prob,
+                                counterpart_prob=sig.counterpart_prob,
+                                data_receipt_ts=sig.data_receipt_ts,
+                                token_id=tok_id,
+                            )
+                            engine.submit_order(order)
+                            risk.record_trade_placed(stake_usd)
+                            open_trades_to_settle.append({
+                                "slug": sig.slug,
+                                "order_id": order.order_id,
+                                "cost": stake_usd,
+                                "window_idx": current_window_idx,
+                                "window_end": (current_window_idx + 1) * 300,
+                                "last_checked_ts": 0.0,
+                            })
+                            dash_state.add_log(
+                                "SIGNAL" if sig.signal_type == "INITIAL" else "REVERSAL",
+                                f"Signal triggered: {sig.signal_type} {sig.side} (${stake_usd:.2f}) prob={sig.trigger_prob:.3f}"
+                            )
+                            dash_state.add_log(
+                                "ORDER",
+                                f"Order placed: {order.order_id} ({sig.signal_type} {sig.side} ${stake_usd:.2f} limit=${sig.price:.3f})"
+                            )
+                        else:
+                            if hasattr(strat, "on_order_rejected"):
+                                strat.on_order_rejected(sig.signal_type, cooldown_sec=3.0, current_ts=now)
+                            log.warning("Trade rejected by Risk Manager: %s", reason)
+                            dash_state.add_log("REJECTED", f"Risk check rejected ({sig.signal_type}): {reason}")
+                else:
+                    # PAPER TRADING: Multi-Market Parallel Execution across all 6 pairs
+                    for a in monitored_assets:
+                        strat_a = strategies[a]
+                        cell_a = multi_orch.cell_manager.get_cell(a)
+                        if cell_a.status == CellStatus.HALTED_DEPLETED:
+                            continue
 
-                    stake_usd = sig.cost_usd
-                    risk.sync_open_exposure(engine.get_open_exposure())
+                        init_b = cell_a.get_initial_budget()
+                        rev_b = cell_a.get_reversal_budget()
+                        if hasattr(strat_a, "set_dynamic_budgets"):
+                            strat_a.set_dynamic_budgets(init_b, rev_b)
 
-                    today = ist_today_str()
+                        spot_a = multi_orch.trackers[a].spot_p or (health.chainlink.last_price if a == "btc" else 0.0)
+                        books_a = clob.get_asset_side_books(a)
+                        if not books_a and a == "btc":
+                            books_a = clob.side_books
 
-                    # Daily shutdown halt (Roadmap Phase 5)
-                    if capital_mgr.is_daily_shutdown_active(today):
-                        if hasattr(strat, "on_order_rejected"):
-                            strat.on_order_rejected(sig.signal_type, cooldown_sec=3.0, current_ts=now)
-                        log.warning("Order blocked: Daily shutdown active for %s (%s)", today, capital_mgr.state.daily_shutdown_reason)
-                        dash_state.add_log("SHUTDOWN", f"Daily shutdown active: {capital_mgr.state.daily_shutdown_reason}")
-                        continue
+                        sig = strat_a.on_tick(spot_a, now, books_a, health)
+                        if sig:
+                            tok_id = discovered_tokens.get(a, {}).get(sig.side)
+                            if sig.action == "SELL":
+                                # Early exit sell
+                                order = Order(
+                                    order_id=f"paper-{a}-{int(now * 1000)}",
+                                    slug=sig.slug,
+                                    side=sig.side,
+                                    action=sig.action,
+                                    order_type=sig.order_type,
+                                    price=sig.price,
+                                    usd_amount=sig.cost_usd,
+                                    shares=sig.shares,
+                                    created_at_ts=now,
+                                    latency_ms=config.strategy.latency_ms,
+                                    signal_type=sig.signal_type,
+                                    linked_order_id=sig.linked_order_id,
+                                    trigger_prob=sig.trigger_prob,
+                                    counterpart_prob=sig.counterpart_prob,
+                                    data_receipt_ts=sig.data_receipt_ts,
+                                    token_id=tok_id,
+                                )
+                                engine.submit_order(order)
+                                dash_state.add_log(
+                                    "EARLY_EXIT",
+                                    f"[{a.upper()}] Early exit sell placed: {order.order_id} ({sig.side} {sig.shares:.2f} shs @ ${sig.price:.3f})"
+                                )
+                                continue
 
-                    # Shortfall safety halt
-                    if capital_mgr.state.active_shortfall_cents > 0:
-                        if hasattr(strat, "on_order_rejected"):
-                            strat.on_order_rejected(sig.signal_type, cooldown_sec=3.0, current_ts=now)
-                        log.warning("Order blocked: Active shortfall ($%.2f) exists. Trading halted.", capital_mgr.state.active_shortfall)
-                        dash_state.add_log("WARNING", f"Shortfall halt: ${capital_mgr.state.active_shortfall:.2f}")
-                        continue
+                            fleet_equity = multi_orch.cell_manager.total_fleet_equity_usd
+                            if not multi_orch.arbiter.can_acquire(a, fleet_equity):
+                                dash_state.add_log(
+                                    "ARBITER",
+                                    f"[{a.upper()}] Concurrency slot denied for {sig.signal_type} {sig.side} (Max slots: {multi_orch.arbiter.get_max_slots(fleet_equity)})"
+                                )
+                                continue
 
-                    # Pre-trade dynamic budget & free active funds validation
-                    b_val = budget_calc.validate_order_budget(
-                        signal_type=sig.signal_type,
-                        active_capital_usd=capital_mgr.state.active_capital,
-                        open_exposure_usd=engine.get_open_exposure(),
-                        override_budget_usd=sig.cost_usd,
-                        allow_adaptive_clamping=True,
-                    )
-                    if not b_val.allowed:
-                        if hasattr(strat, "on_order_rejected"):
-                            strat.on_order_rejected(sig.signal_type, cooldown_sec=3.0, current_ts=now)
-                        log.warning("[ORDER_BUDGET_REJECTED] %s: %s", sig.signal_type, b_val.reason)
-                        dash_state.add_log("REJECTED", f"Order budget blocked ({sig.signal_type}): {b_val.reason}")
-                        continue
-
-                    # If budget was adaptively clamped to available free funds, scale stake and shares
-                    if b_val.approved_budget_usd > 0 and b_val.approved_budget_usd < stake_usd:
-                        scale = b_val.approved_budget_usd / stake_usd
-                        stake_usd = b_val.approved_budget_usd
-                        sig.shares = round(sig.shares * scale, 4)
-                        sig.cost_usd = stake_usd
-                        log.info(
-                            "[BUDGET_ADAPTED_EXECUTION] Scaled %s order stake to $%.2f (shares=%.4f)",
-                            sig.signal_type, stake_usd, sig.shares,
-                        )
-
-                    allowed, reason = risk.check_trade_allowed(
-                        stake_usd, current_window_idx, active_capital_usd=capital_mgr.state.active_capital
-                    )
-                    if allowed:
-                        tok_id = current_tokens.get(sig.side) if current_tokens else None
-                        order = Order(
-                            order_id=f"live-{int(now * 1000)}" if is_live else f"paper-{int(now * 1000)}",
-                            slug=sig.slug,
-                            side=sig.side,
-                            action=sig.action,
-                            order_type=sig.order_type,
-                            price=sig.price,
-                            usd_amount=stake_usd,
-                            shares=sig.shares,
-                            created_at_ts=now,
-                            latency_ms=config.strategy.latency_ms,
-                            signal_type=sig.signal_type,
-                            linked_order_id=sig.linked_order_id,
-                            trigger_prob=sig.trigger_prob,
-                            counterpart_prob=sig.counterpart_prob,
-                            data_receipt_ts=sig.data_receipt_ts,
-                            token_id=tok_id,
-                        )
-                        engine.submit_order(order)
-                        risk.record_trade_placed(stake_usd)
-                        open_trades_to_settle.append({
-                            "slug": sig.slug,
-                            "order_id": order.order_id,
-                            "cost": stake_usd,
-                            "window_idx": current_window_idx,
-                            "window_end": (current_window_idx + 1) * 300,
-                            "last_checked_ts": 0.0,
-                        })
-                        dash_state.add_log(
-                            "SIGNAL" if sig.signal_type == "INITIAL" else "REVERSAL",
-                            f"Signal triggered: {sig.signal_type} {sig.side} (${stake_usd:.2f}) prob={sig.trigger_prob:.3f}"
-                        )
-                        dash_state.add_log(
-                            "ORDER",
-                            f"Order placed: {order.order_id} ({sig.signal_type} {sig.side} ${stake_usd:.2f} limit=${sig.price:.3f})"
-                        )
-                    else:
-                        if hasattr(strat, "on_order_rejected"):
-                            strat.on_order_rejected(sig.signal_type, cooldown_sec=3.0, current_ts=now)
-                        log.warning("Trade rejected by Risk Manager: %s", reason)
-                        dash_state.add_log("REJECTED", f"Risk check rejected ({sig.signal_type}): {reason}")
+                            multi_orch.arbiter.acquire(a, sig.signal_type, sig.cost_usd, fleet_equity)
+                            order = Order(
+                                order_id=f"paper-{a}-{int(now * 1000)}",
+                                slug=sig.slug,
+                                side=sig.side,
+                                action=sig.action,
+                                order_type=sig.order_type,
+                                price=sig.price,
+                                usd_amount=sig.cost_usd,
+                                shares=sig.shares,
+                                created_at_ts=now,
+                                latency_ms=config.strategy.latency_ms,
+                                signal_type=sig.signal_type,
+                                linked_order_id=sig.linked_order_id,
+                                trigger_prob=sig.trigger_prob,
+                                counterpart_prob=sig.counterpart_prob,
+                                data_receipt_ts=sig.data_receipt_ts,
+                                token_id=tok_id,
+                            )
+                            engine.submit_order(order)
+                            risk.record_trade_placed(sig.cost_usd)
+                            open_trades_to_settle.append({
+                                "slug": sig.slug,
+                                "order_id": order.order_id,
+                                "asset": a,
+                                "cost": sig.cost_usd,
+                                "window_idx": current_window_idx,
+                                "window_end": (current_window_idx + 1) * 300,
+                                "last_checked_ts": 0.0,
+                            })
+                            dash_state.add_log(
+                                "SIGNAL" if sig.signal_type == "INITIAL" else "REVERSAL",
+                                f"[{a.upper()}] Signal triggered: {sig.signal_type} {sig.side} (${sig.cost_usd:.2f}) prob={sig.trigger_prob:.3f}"
+                            )
+                            dash_state.add_log(
+                                "ORDER",
+                                f"[{a.upper()}] Order placed: {order.order_id} ({sig.signal_type} {sig.side} ${sig.cost_usd:.2f} limit=${sig.price:.3f})"
+                            )
 
             # Check settlements for concluded windows
             pending_slugs = {item["slug"] for item in open_trades_to_settle if now >= item.get("window_end", 0)}
             for slug in pending_slugs:
+                slug_asset = slug.split("-")[0].lower() if "-" in slug else "btc"
                 if demo:
                     winner = "Down"
                 else:
@@ -745,46 +916,80 @@ async def run_paper(
                     for settled_pos in settled_positions:
                         risk.record_trade_settled(settled_pos.realized_pnl_usd, settled_pos.total_cost_usd, current_window_idx)
 
-                        # Capital Ledger Settlement Hook (Roadmap Phase 4 & 5)
-                        settle_id = f"settle-{slug}-{settled_pos.order_id or settled_pos.position_id or int(now * 1000)}"
-                        try:
-                            capital_mgr.process_settlement(
-                                settlement_id=settle_id,
-                                net_pnl_usd=settled_pos.realized_pnl_usd,
-                                fee_usd=settled_pos.total_fees_usd,
-                                trading_day=ist_today_str(),
-                                signal_type=settled_pos.signal_type,
+                        if is_live:
+                            # Capital Ledger Settlement Hook (Roadmap Phase 4 & 5) - LIVE BTC ONLY
+                            settle_id = f"settle-{slug}-{settled_pos.order_id or settled_pos.position_id or int(now * 1000)}"
+                            try:
+                                capital_mgr.process_settlement(
+                                    settlement_id=settle_id,
+                                    net_pnl_usd=settled_pos.realized_pnl_usd,
+                                    fee_usd=settled_pos.total_fees_usd,
+                                    trading_day=ist_today_str(),
+                                    signal_type=settled_pos.signal_type,
+                                )
+                                log.info("[SETTLEMENT_PROCESSED] settle_id=%s net_pnl=$%+.2f fee=$%.2f",
+                                         settle_id, settled_pos.realized_pnl_usd, settled_pos.total_fees_usd)
+                            except Exception as e:
+                                log.error("Failed to process capital settlement for %s: %s", settle_id, e)
+
+                            # If daily shutdown triggered, safely cancel pending orders
+                            if capital_mgr.is_daily_shutdown_active():
+                                cancelled_cnt = engine.cancel_pending_orders()
+                                if cancelled_cnt > 0:
+                                    log.info("Cancelled %d unfilled pending orders due to daily shutdown", cancelled_cnt)
+
+                            open_exp = engine.get_open_exposure()
+                            init_b, rev_b = capital_mgr.get_trade_budgets(ist_today_str())
+                            dash_cap = capital_mgr.state.to_dict()
+                            dash_cap.update({
+                                "current_initial_budget": init_b,
+                                "current_reversal_budget": rev_b,
+                                "open_exposure": round(open_exp, 2),
+                                "spendable_active_funds": max(0.0, round(capital_mgr.state.active_capital - open_exp, 2)),
+                                "active_funds_reserved": round(open_exp, 2),
+                                "protected_funds": capital_mgr.state.protected_capital,
+                                "unsettled_funds": round(open_exp, 2),
+                            })
+                            dash_state.update_capital(dash_cap)
+                            dash_state.add_log(
+                                "SETTLED",
+                                f"Settled {slug}: position={settled_pos.side} ({settled_pos.signal_type}) winner={winner} | "
+                                f"PnL=${settled_pos.realized_pnl_usd:+.2f} | Active=${capital_mgr.state.active_capital:.2f} "
+                                f"Prot=${capital_mgr.state.protected_capital:.2f} Total=${capital_mgr.state.total_equity:.2f}"
                             )
-                            log.info("[SETTLEMENT_PROCESSED] settle_id=%s net_pnl=$%+.2f fee=$%.2f",
-                                     settle_id, settled_pos.realized_pnl_usd, settled_pos.total_fees_usd)
-                        except Exception as e:
-                            log.error("Failed to process capital settlement for %s: %s", settle_id, e)
+                        else:
+                            # PAPER MODE: Route to compartmentalized MarketCell and check $100 harvest
+                            cell = multi_orch.cell_manager.get_cell(slug_asset)
+                            is_rev = settled_pos.signal_type == "REVERSAL"
+                            cell.record_trade_result(settled_pos.realized_pnl_usd, is_reversal=is_rev)
 
-                        # If daily shutdown triggered, safely cancel pending orders
-                        if capital_mgr.is_daily_shutdown_active():
-                            cancelled_cnt = engine.cancel_pending_orders()
-                            if cancelled_cnt > 0:
-                                log.info("Cancelled %d unfilled pending orders due to daily shutdown", cancelled_cnt)
+                            harvest = multi_orch.cell_manager.check_and_trigger_harvest(slug_asset)
+                            if harvest:
+                                dash_state.add_log(
+                                    "HARVEST",
+                                    f"[{slug_asset.upper()}] $100 TARGET GRADUATED! Self-seeded $12.00, Revived {harvest.halted_cells_revived} cells (${harvest.halted_cells_revived * 12:.2f}), Swept ${harvest.amount_swept_usd:.2f} to Binance Cold Storage!"
+                                )
 
-                        open_exp = engine.get_open_exposure()
-                        init_b, rev_b = capital_mgr.get_trade_budgets(ist_today_str())
-                        dash_cap = capital_mgr.state.to_dict()
-                        dash_cap.update({
-                            "current_initial_budget": init_b,
-                            "current_reversal_budget": rev_b,
-                            "open_exposure": round(open_exp, 2),
-                            "spendable_active_funds": max(0.0, round(capital_mgr.state.active_capital - open_exp, 2)),
-                            "active_funds_reserved": round(open_exp, 2),
-                            "protected_funds": capital_mgr.state.protected_capital,
-                            "unsettled_funds": round(open_exp, 2),
-                        })
-                        dash_state.update_capital(dash_cap)
-                        dash_state.add_log(
-                            "SETTLED",
-                            f"Settled {slug}: position={settled_pos.side} ({settled_pos.signal_type}) winner={winner} | "
-                            f"PnL=${settled_pos.realized_pnl_usd:+.2f} | Active=${capital_mgr.state.active_capital:.2f} "
-                            f"Prot=${capital_mgr.state.protected_capital:.2f} Total=${capital_mgr.state.total_equity:.2f}"
-                        )
+                            multi_orch.arbiter.release(slug_asset)
+
+                            settle_id = f"settle-{slug}-{settled_pos.order_id or settled_pos.position_id or int(now * 1000)}"
+                            try:
+                                capital_mgr.process_settlement(
+                                    settlement_id=settle_id,
+                                    net_pnl_usd=settled_pos.realized_pnl_usd,
+                                    fee_usd=settled_pos.total_fees_usd,
+                                    trading_day=ist_today_str(),
+                                    signal_type=settled_pos.signal_type,
+                                )
+                            except Exception:
+                                pass
+
+                            dash_state.add_log(
+                                "SETTLED",
+                                f"[{slug_asset.upper()}] Settled {slug}: position={settled_pos.side} ({settled_pos.signal_type}) winner={winner} | "
+                                f"PnL=${settled_pos.realized_pnl_usd:+.2f} | Cell Equity=${cell.capital_usd:.2f} | Fleet Total=${multi_orch.cell_manager.total_fleet_equity_usd:.2f}"
+                            )
+
                         log.info(
                             "PAPER POSITION SETTLED %s %s (%s) | PnL=$%+.2f | Total PnL=$%+.2f | Capital: Active=$%.2f Prot=$%.2f Total=$%.2f",
                             slug,

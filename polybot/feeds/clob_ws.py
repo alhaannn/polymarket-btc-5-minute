@@ -154,6 +154,8 @@ class CLOBOrderBookFeed:
 
         self.books: Dict[str, TokenOrderBook] = {}
         self.token_to_side: Dict[str, str] = {}  # token_id -> 'Up' or 'Down'
+        self.token_to_meta: Dict[str, Tuple[str, str]] = {}  # token_id -> (asset, side)
+        self.asset_tokens: Dict[str, Dict[str, str]] = {}  # asset -> {'Up': tid, 'Down': tid}
 
         self._subscribed_tokens: List[str] = []
         self._running = False
@@ -170,44 +172,57 @@ class CLOBOrderBookFeed:
                 result[side] = self.books[tid]
         return result
 
-    def get_effective_ask(self, side: str) -> Optional[float]:
+    def get_effective_ask(self, side: str, asset: Optional[str] = None) -> Optional[float]:
         """
         Returns best ask for side ('Up' or 'Down').
+        Supports scoping to a specific asset ('btc', 'eth', etc.).
         If direct ask book is empty, derives implied ask from opposite outcome's best bid:
         ask(Up) = 1.0 - bid(Down).
         """
-        book = self.get_book(side)
+        book = self.get_asset_book(asset, side) if asset else self.get_book(side)
         if book and book.best_ask() is not None:
             return book.best_ask()
         opp_side = "Down" if side.lower() == "up" else "Up"
-        opp_book = self.get_book(opp_side)
+        opp_book = self.get_asset_book(asset, opp_side) if asset else self.get_book(opp_side)
         if opp_book and opp_book.best_bid() is not None:
             return round(1.0 - opp_book.best_bid(), 4)
         return None
 
-    def get_effective_bid(self, side: str) -> Optional[float]:
+    def get_effective_bid(self, side: str, asset: Optional[str] = None) -> Optional[float]:
         """
         Returns best bid for side ('Up' or 'Down').
+        Supports scoping to a specific asset ('btc', 'eth', etc.).
         If direct bid book is empty, derives implied bid from opposite outcome's best ask:
         bid(Up) = 1.0 - ask(Down).
         """
-        book = self.get_book(side)
+        book = self.get_asset_book(asset, side) if asset else self.get_book(side)
         if book and book.best_bid() is not None:
             return book.best_bid()
         opp_side = "Down" if side.lower() == "up" else "Up"
-        opp_book = self.get_book(opp_side)
+        opp_book = self.get_asset_book(asset, opp_side) if asset else self.get_book(opp_side)
         if opp_book and opp_book.best_ask() is not None:
             return round(1.0 - opp_book.best_ask(), 4)
         return None
 
-    def track_tokens(self, tokens_map: Dict[str, str]) -> None:
-        """Set tokens to track: {'Up': token_up, 'Down': token_down}"""
+    def track_multi_tokens(self, multi_tokens_map: Dict[str, Dict[str, str]]) -> None:
+        """
+        Set tokens to track across multiple 5m assets:
+        {'btc': {'Up': tok1, 'Down': tok2}, 'eth': {'Up': tok3, 'Down': tok4}, ...}
+        """
+        self.asset_tokens = {k.lower().strip(): dict(v) for k, v in multi_tokens_map.items()}
         self.token_to_side.clear()
-        self._subscribed_tokens = list(tokens_map.values())
-        for side, tid in tokens_map.items():
-            self.token_to_side[tid] = side
-            if tid not in self.books:
-                self.books[tid] = TokenOrderBook(tid)
+        self.token_to_meta.clear()
+        all_tokens: List[str] = []
+
+        for asset, tmap in self.asset_tokens.items():
+            for side, tid in tmap.items():
+                self.token_to_side[tid] = side
+                self.token_to_meta[tid] = (asset, side)
+                all_tokens.append(tid)
+                if tid not in self.books:
+                    self.books[tid] = TokenOrderBook(tid)
+
+        self._subscribed_tokens = all_tokens
 
         # Polymarket CLOB WS rejects secondary market subscriptions with 'INVALID OPERATION'.
         # We cleanly close the current socket so _run_loop immediately connects a fresh socket
@@ -218,6 +233,27 @@ class CLOBOrderBookFeed:
                 asyncio.create_task(self._ws.close())
             except Exception as e:
                 log.debug("Failed to close socket for token rollover: %s", e)
+
+    def track_tokens(self, tokens_map: Dict[str, str], asset: str = "btc") -> None:
+        """Set tokens to track for a single asset (defaults to 'btc' for backward compatibility)."""
+        self.track_multi_tokens({asset: tokens_map})
+
+    def get_asset_book(self, asset: str, side: str) -> Optional[TokenOrderBook]:
+        """Returns TokenOrderBook for a given asset ('btc', 'eth', etc.) and side ('Up', 'Down')."""
+        tmap = self.asset_tokens.get(asset.lower().strip(), {})
+        for s, tid in tmap.items():
+            if s.lower() == side.lower():
+                return self.books.get(tid)
+        return None
+
+    def get_asset_side_books(self, asset: str) -> Dict[str, TokenOrderBook]:
+        """Returns {'Up': book_up, 'Down': book_down} for a specific asset."""
+        tmap = self.asset_tokens.get(asset.lower().strip(), {})
+        res: Dict[str, TokenOrderBook] = {}
+        for side, tid in tmap.items():
+            if tid in self.books:
+                res[side] = self.books[tid]
+        return res
 
     def get_book(self, side_or_token: str) -> Optional[TokenOrderBook]:
         if side_or_token in self.books:
