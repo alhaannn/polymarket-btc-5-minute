@@ -1,9 +1,9 @@
 # Polymarket Trading Bot — Future Enhancements & Master Strategic Roadmap
-**Document Version:** 3.0.0  
-**Status:** Approved for Implementation (Paper Mode Validation First)  
+**Document Version:** 3.1.0  
+**Status:** Step 1 & Step 2 Completed & Deployed on EC2 (Paper Mode Validation In Progress)  
 **Target Environment:** 
-* **Validation Phase:** `polybot-paper` on port 8081 (`https://alphora.duckdns.org/paper/`) for ~1 Week
-* **Production Graduation Phase:** `polybot-live` on port 8080 (`https://alphora.duckdns.org/`) upon profitability confirmation
+* **Validation Phase:** `polybot-paper` on port 8081 (`https://alphora.duckdns.org/paper/`) for ~1 Week (Active)
+* **Production Graduation Phase:** `polybot-live` on port 8080 (`https://alphora.duckdns.org/`) strictly BTC-only until authorized
 
 ---
 
@@ -169,6 +169,108 @@ The only condition under which the bot halts entirely and awaits a manual $72 de
 
 ---
 
+## 📈 Mathematical Protective Capital Evolution: $44 Milestone ➔ $100 Cell Graduation
+
+### 1. Comparative Architecture: Single-Asset vs. 6-Market Fleet
+
+| Feature | Single-Asset BTC Model (`MATHEMATICAL_GROWTH_COMPOUNDING_MODEL.md`) | 6-Market Fleet Model (`FUTURE_ENHANCEMENTS.md` / `polybot/capital/cell.py`) |
+| :--- | :--- | :--- |
+| **Operating Environment** | **Live Trading** (`polybot-live`, Port 8080) | **Paper Trading** (`polybot-paper`, Port 8081) |
+| **Scope** | Single pooled BTC account | 6 Independent Compartmentalized Cells (BTC, ETH, SOL, DOGE, XRP, BNB) |
+| **Starting Equity** | $11.00 baseline | $72.00 total ($12.00 base per cell $\times$ 6 cells) |
+| **Protective Milestone Trigger** | **$44.00 Total Equity** | **$100.00 Cell Equity** (per winning asset) |
+| **Protective Split Structure** | **50% Active / 50% Protected Vault** | **$12.00 Self-Seed + $12.00 Reviver Grants + $76–$88 Cold Sweep** |
+| **Location of Protected Funds** | Retained in Polymarket contract balance | **Physically swept on-chain to Binance Polygon USDC** |
+| **Post-Milestone Staking** | Resets downward to $2 Initial / $20 Reversal | Resets to $1 Initial / $11 Reversal (Fresh compounding cycle) |
+
+### 2. Why the Protective Milestone was Extended from $44 to $100
+1. **Bulkhead Independence:** In the single-asset model, an account starting at $11 had no bulkheads; if a reversal failed, 100% of the funds were wiped out. Splitting at $44 into a $22 Vault was required to protect 50% of capital internally.
+2. **Smooth Multi-Asset Compounding:** In the 6-market architecture, each cell is already an isolated bulkhead with a strict maximum risk of its own $12 base. Forcing a $44 split inside a cell would reduce active capital to just $22 ($2 initial stake), creating unnecessary drag.
+3. **Physical Profit Extraction:** Instead of keeping protected funds inside Polymarket, extending to $100 allows sweeping **$76.00 to $88.00 directly to Binance Cold Storage** (76% to 88% profit locked forever off-exchange), while retaining $12 to seamlessly restart the next cycle.
+
+#### Per-Cell Sizing Progression ($12.00 Base ➔ $100.00 Milestone)
+$$\text{Initial Stake: } S_i = \max\left(1, \min\left(20, \text{round\_half\_up}\left(\frac{C_{\text{cell}}}{11}\right)\right)\right)$$
+$$\text{Reversal Stake: } S_r = \max\left(1, \min\left(S_{r,\max}, \text{round\_half\_up}\left(\frac{C_{\text{cell}} \times 10}{11}\right)\right)\right)$$
+
+| Cell Equity ($C_{\text{cell}}$) | Initial Stake ($S_i$) | Reversal Stake ($S_r$) | Reversal Multiplier | CLOB Liquidity Safety | Harvest / Milestone |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **$12.00** *(Baseline)* | **$1.00** | **$11.00** | 11.0x | Flawless | Initial Seed |
+| **$22.00** | **$2.00** | **$20.00** | 10.0x | Flawless | Tier 2 Sizing |
+| **$33.00** | **$3.00** | **$30.00** | 10.0x | Flawless | Tier 3 Sizing |
+| **$44.00** | **$4.00** | **$40.00** | 10.0x | Flawless | Previous Single-Asset M1 |
+| **$55.00** | **$5.00** | **$50.00** | 10.0x | Flawless | Intermediate Growth |
+| **$66.00** | **$6.00** | **$60.00** | 10.0x | Flawless | Mid-Tier Growth |
+| **$77.00** | **$7.00** | **$70.00** | 10.0x | Flawless | Upper-Tier Growth |
+| **$88.00** | **$8.00** | **$75.00** *(Cap)* | 9.4x | High-Equity Safeguard | Approaching Milestone |
+| **$100.00** | **GRADUATED!** | **HARVEST FIRED** | — | — | **$12 Seed + $76–$88 Swept** |
+
+---
+
+## 🛡️ Polymarket CLOB Liquidity Safety & Order Sizing Mechanics
+
+### 1. Orderbook Microstructure & The Purpose of the $75 Cap
+
+Polymarket's 5-minute binary options (`Up` / `Down`) are structured such that contracts trade between $0.01 and $0.99. Taker orders sweep resting limit asks.
+
+```
+   TYPICAL 5-MINUTE POLYMARKET ASK BOOK AT 87% (t = 200s)
+   -------------------------------------------------------
+   Level 1 (Best Ask):  $0.870  x   45.0 shares  ($39.15 depth)
+   Level 2:             $0.880  x   60.0 shares  ($52.80 depth)  <-- Cumulative: $91.95
+   Level 3:             $0.890  x   80.0 shares  ($71.20 depth)  <-- Cumulative: $163.15
+   Level 4:             $0.900  x  120.0 shares  ($108.00 depth) <-- Cumulative: $271.15
+```
+
+When placing a taker buy order of size $D$ at an average price of $P \approx $0.875:
+$$\text{Shares Demanded} = \frac{D}{P}$$
+
+* **$10.00 Order:** Demands $\approx 11.4\text{ shares}$ $\to$ Fills 100% inside Level 1 with $0.0\%$ slippage.
+* **$75.00 Order:** Demands $\approx 85.7\text{ shares}$ $\to$ Sweeps Level 1 and part of Level 2 with $<0.5\%$ slippage.
+* **$100.00 Order:** Demands $\approx 114.3\text{ shares}$ $\to$ Sweeps Levels 1–3 with $0.6\% - 1.2\%$ slippage.
+* **$455.00 Order (Uncapped 1:10 at $500 Equity):** Demands $\approx 520\text{ shares}$ $\to$ Sweeps 5+ levels, incurs $>3.5\%$ slippage, and risks hitting the 1.5% slippage circuit breaker.
+
+> [!NOTE]
+> **Why $75 was Originally Chosen:**  
+> The $75 cap was **not** a physical limit of the exchange. It was chosen as a conservative, "lowest common denominator" safety floor across all 6 markets to ensure that thinner altcoins (DOGE, XRP, BNB) would never breach the 1.5% maximum slippage rule in `polybot/filters.py`.
+
+### 2. Can a $100 Reversal Order ($10 Initial ➔ $100 Reversal) Fill Safely?
+* **On BTC and ETH (High Liquidity):** **YES.** During prime hours (13:30–01:00 IST), cumulative ask depth across the top 3 levels typically exceeds **$300 to $1,500+**. A **$100 reversal order fills cleanly and reliably**.
+* **On Altcoins (SOL, DOGE, XRP, BNB):** Resting liquidity in the top levels is typically $60 to $150. A $100 taker order will sweep into Level 2 or 3, incurring 0.8% to 1.4% slippage, but will still fill under normal market conditions.
+
+### 3. The Risk/Reward Tradeoff: 10x vs. 4x Reversal at Scale
+
+Beyond orderbook execution, there is a fundamental risk-management decision when trading with larger capital:
+
+#### Scenario A: Canonical 10x Reversal ($10 Initial ➔ $100 Reversal)
+* Active Capital: **$110.00**
+* Initial Bet: **$10.00**
+* If Initial Fails, Bot fires **$100.00 Reversal**:
+  * **Win (87.5% empirical rate):** Payout $= \$100 \times (1 / 0.873 - 1) = +\$14.55$. Minus initial loss ($-\$10) = \mathbf{+\$4.55\text{ Net Profit}}$.
+  * **Loss (Black Swan):** Initial ($-\$10) + Reversal ($-\$100) = \mathbf{-\$110.00\text{ Total Loss (100\% Account Wipeout)}}$.
+* *Verdict:* Maximum recovery, but risks 91% of active capital on a single 5-minute reversal.
+
+#### Scenario B: Century Tier 4x Reversal ($10 Initial ➔ $40 Reversal)
+* Active Capital: **$110.00**
+* Initial Bet: **$10.00**
+* If Initial Fails, Bot fires **$40.00 Reversal**:
+  * **Win:** Payout $= \$40 \times (1 / 0.873 - 1) = +\$5.82$. Minus initial loss ($-\$10) = \mathbf{-\$4.18\text{ Net Loss}}$. (Recovers 58% of the loss).
+  * **Loss (Black Swan):** Initial ($-\$10) + Reversal ($-\$40) = \mathbf{-\$50.00\text{ Total Loss}}$. Account retains **$60.00 (55% capital survives)**.
+* *Verdict:* Controlled drawdown, prevents catastrophic single-epoch wipeout.
+
+### 4. Proposed Dynamic Asset-Tiered CLOB Liquidity Safety Architecture
+
+To maximize compounding velocity while maintaining institutional liquidity safety, the system architecture plans for **Asset-Tiered Liquidity Caps**:
+
+| Asset Tier | Assets | Top-3 Asks Depth | Max Initial Stake ($S_{i,\max}$) | Max Reversal Stake ($S_{r,\max}$) | Slippage Profile |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Tier 1 (High Depth)** | **BTC, ETH** | $300 – $1,500+ | **$20.00** | **$100.00** | $<0.6\%$ (Flawless) |
+| **Tier 2 (Mid Depth)** | **SOL** | $150 – $400 | **$15.00** | **$85.00** | $<0.9\%$ (Smooth) |
+| **Tier 3 (Alt Depth)** | **DOGE, XRP, BNB** | $60 – $180 | **$10.00** | **$75.00** | $<1.2\%$ (Safe) |
+
+*This architecture allows BTC and ETH to fully utilize $10 Initial / $100 Reversal sizing, while safeguarding thinner altcoin cells from excessive slippage.*
+
+---
+
 ## 🖥️ Complete Redesign of the Paper Dashboard (`https://alphora.duckdns.org/paper/`)
 
 The workstation will be transformed from a single-asset monitor into an **Enterprise-Grade 6-Market Multi-Asset Command Center**:
@@ -314,17 +416,21 @@ Before migrating the 6-market architecture to live money:
 
 ---
 
-## 🗂️ Implementation Breakdown & Files to Touch
+## 🗂️ Implementation Breakdown & Component Status
 
 1. **[`polybot/gamma.py`](file:///c:/Users/HP%20Victus/OneDrive/Desktop/polymarketbot/polybot/gamma.py):**
-   * Support dynamic asset discovery for `btc`, `eth`, `sol`, `doge`, `xrp`, `bnb`.
+   * Multi-asset discovery via `get_multi_markets(window_start, assets)` for `btc`, `eth`, `sol`, `doge`, `xrp`, `bnb`. **[COMPLETED & DEPLOYED]**
 2. **[`polybot/feeds/binance.py`](file:///c:/Users/HP%20Victus/OneDrive/Desktop/polymarketbot/polybot/feeds/binance.py):**
-   * Multiplex combined stream: `streams=btcusdt@trade/ethusdt@trade/solusdt@trade/dogeusdt@trade/xrpusdt@trade/bnbusdt@trade`.
-3. **`polybot/capital/cell.py` (New):**
-   * Compartmentalized `MarketCellManager`: enforces strict $12 partition per market, isolated compounding, zero-leak reversal loss bulkheads (`HALTED_DEPLETED`), and autonomous $100 graduation events (`TARGET_GRADUATED`).
-4. **`polybot/multi_market.py` (New):**
-   * Multi-asset orchestrator, asset state trackers, and `GlobalConcurrencyArbiter`.
-5. **`polybot/capital/sweeper.py` (New):**
-   * Milestone tracking and autonomous Binance cold-storage profit sweeper (Polygon POS USDC).
-6. **[`polybot/dashboard/`](file:///c:/Users/HP%20Victus/OneDrive/Desktop/polymarketbot/polybot/dashboard/):**
-   * Redesign `index.html`, `app.js`, and `style.css` for the 6-Market Matrix, per-asset cell status badges (`STANDBY`, `TRIGGER`, `ACTIVE`, `WIPED_STOPPED`, `GRADUATED`), and cold storage sweep analytics.
+   * Multiplex combined stream: `streams=btcusdt@trade/ethusdt@trade/solusdt@trade/dogeusdt@trade/xrpusdt@trade/bnbusdt@trade`. **[COMPLETED & DEPLOYED]**
+3. **[`polybot/feeds/clob_ws.py`](file:///c:/Users/HP%20Victus/OneDrive/Desktop/polymarketbot/polybot/feeds/clob_ws.py):**
+   * Multi-token WebSocket tracking (12 tokens simultaneously) with asset-scoped orderbooks and effective pricing. **[COMPLETED & DEPLOYED]**
+4. **[`polybot/capital/cell.py`](file:///c:/Users/HP%20Victus/OneDrive/Desktop/polymarketbot/polybot/capital/cell.py):**
+   * Compartmentalized `MarketCellManager`: enforces strict $12 partition per market, isolated compounding, zero-leak reversal loss bulkheads (`HALTED_DEPLETED`), and autonomous $100 graduation events (`TARGET_GRADUATED`). **[COMPLETED & DEPLOYED]**
+5. **[`polybot/multi_market.py`](file:///c:/Users/HP%20Victus/OneDrive/Desktop/polymarketbot/polybot/multi_market.py):**
+   * Multi-asset orchestrator, asset state trackers, and `GlobalConcurrencyArbiter` (zero margin collision). **[COMPLETED & DEPLOYED]**
+6. **[`polybot/main.py`](file:///c:/Users/HP%20Victus/OneDrive/Desktop/polymarketbot/polybot/main.py):**
+   * Parallel execution loop across 6 markets for paper trading while guaranteeing strict single-asset BTC isolation for live trading. **[COMPLETED & DEPLOYED]**
+7. **[`polybot/dashboard/`](file:///c:/Users/HP%20Victus/OneDrive/Desktop/polymarketbot/polybot/dashboard/):**
+   * 6-Market Matrix Grid, Arbiter slot status, per-asset cell ledger, and cold storage sweep analytics on Port 8081 (`/paper/`), with full UI suppression on Live mode (Port 8080). **[COMPLETED & DEPLOYED]**
+8. **`polybot/capital/sweeper.py` (Phase 3.2):**
+   * Milestone tracking and automated Binance cold-storage profit sweeper (Polygon POS USDC). **[IN PLANNING]**
