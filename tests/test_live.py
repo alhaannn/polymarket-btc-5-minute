@@ -148,6 +148,42 @@ def test_live_cancel_order_supports_both_api_methods(tmp_path: Path):
     assert engine_v2.cancel_order("ord-123") is True
     assert engine_v2.clob_client.cancelled == ["ord-123"]
 
+
+def test_live_marketable_buy_strict_dollar_floor_precision(tmp_path: Path):
+    """
+    Polymarket CLOB enforces a strict minimum floor of $1.00 USD on marketable BUY orders.
+    Verifies that for initial $1.00 orders across problematic prices (e.g. 0.900, 0.910),
+    unrounded float shares from simulation (e.g. 1.098901 shares at 0.910)
+    are strictly quantized and bumped so (size * price) >= 1.000000 USD.
+    """
+    cfg = PolybotConfig()
+    cfg.live.is_live_requested = True
+    cfg.live.live_confirm_token = "YES_I_UNDERSTAND"
+
+    for price in [0.890, 0.900, 0.910, 0.920]:
+        mock_client = MockClobClient()
+        engine = LiveExecutionEngine(cfg, clob_client=mock_client, ledger=TradeLedger(tmp_path / f"test_{int(price*1000)}.db"))
+        # Unrounded float shares as produced by orderbook simulate_buy(1.0)
+        unrounded_shares = 1.0 / price
+        order = Order(
+            order_id=f"ord-{int(price*1000)}",
+            slug="btc-updown-5m-1000",
+            side="Up",
+            action="BUY",
+            order_type="taker",
+            price=price,
+            usd_amount=1.0,
+            shares=unrounded_shares,
+            created_at_ts=1000.0,
+        )
+        res_order = engine.submit_order(order)
+        # Order shares must be quantized to 2 decimals
+        assert round(res_order.shares, 2) == res_order.shares
+        # Notional value must be strictly >= $1.00 USD
+        notional = round(res_order.shares * price, 4)
+        assert notional >= 1.0000, f"Order at {price} had sub-dollar notional {notional} < $1.00"
+
+
     # Client with cancel (V1 legacy)
     class V1Client:
         def __init__(self):

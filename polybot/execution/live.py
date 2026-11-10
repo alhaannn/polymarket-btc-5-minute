@@ -255,29 +255,35 @@ class LiveExecutionEngine(ExecutionEngine):
         except ImportError:
             from py_clob_client.order_builder.constants import BUY, SELL
 
+        import math
         side_str = BUY if order.action == "BUY" else SELL
+
+        # Quantize share size to 2 decimal places (Polymarket share resolution)
         if getattr(order, "shares", 0.0) > 0:
-            size = order.shares
+            size = math.floor(float(order.shares) * 100.0) / 100.0
         else:
-            size = round(order.usd_amount / order.price, 2)
+            size = math.floor((float(order.usd_amount) / float(order.price)) * 100.0) / 100.0
+
         if size <= 0:
             size = 1.0
 
-        if side_str == BUY:
-            # Polymarket CLOB enforces a strict minimum floor of $1.00 USD on marketable BUY orders.
-            # Due to 2-decimal share rounding (e.g. $1.00 / 0.89 = 1.12 sh -> 1.12 * 0.89 = $0.9968),
-            # ensure size * price is strictly >= 1.00 USD by taking the ceiling to the next 0.01 share.
-            if round(size * order.price, 4) < 1.00:
-                import math
-                size = math.ceil((1.00 / order.price) * 100.0) / 100.0
-                order.usd_amount = round(size * order.price, 4)
+        if side_str == BUY and (size * order.price) < 1.000000 - 1e-9:
+            # Polymarket CLOB enforces a strict minimum floor of $1.000000 USD on marketable BUY orders.
+            # Because py_clob_client_v2 computes makerAmount = round_down(size, 2) * price,
+            # any sub-cent shortfall (e.g. 1.09 * 0.910 = $0.9919 or 1.11 * 0.900 = $0.9990)
+            # causes an immediate HTTP 400 rejection: 'invalid amount for a marketable BUY order, min size: 1'.
+            # We strictly bump size by 0.01 shares until size * price is >= $1.000000 USD.
+            while (size * order.price) < 1.000000 - 1e-9:
+                size = round(size + 0.01, 2)
+            order.usd_amount = round(size * order.price, 4)
+
         order.shares = size
 
         # py_clob_client_v2.order_builder uses round_down(size, 2) which does floor(size * 100) / 100.
         # Due to IEEE-754 binary floating-point representation, numbers like 1.13 * 100 evaluate to 112.99999999999999,
         # which floors to 112 (1.12 shares, causing Polymarket 400 rejection).
         # Adding 1e-6 float epsilon prevents this under-floor truncation when building the order args.
-        clob_size = size + 1e-6
+        clob_size = round(size, 2) + 1e-6
 
         # Pre-execution wallet balance check
         try:
