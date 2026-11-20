@@ -3,7 +3,8 @@
  * Handles real-time polling, gauge animation, tab switching, and bot controls.
  */
 
-const API_BASE = window.location.pathname.startsWith('/paper') ? '/paper' : '';
+const m = window.location.pathname.match(/^\/(paper\d*)/);
+const API_BASE = m ? ('/' + m[1]) : '';
 
 let authConfig = { authenticated: false, auth_enabled: false, pin_required: false, username: '' };
 let pendingAction = null;
@@ -317,6 +318,14 @@ function renderState(state) {
       const titleEl = document.querySelector('.brand-title');
       if (titleEl && !titleEl.textContent.includes('Live')) {
         titleEl.textContent = 'Polymarket 5-Minute Live Trading Workstation';
+      }
+    } else if (state.execution_mode === 'paper1') {
+      modePill.className = 'status-pill mode-paper';
+      modePill.innerHTML = '<span class="status-dot"></span> PAPER 1 (INITIAL-ONLY)';
+      modePill.title = 'Paper trading mode: Initial-Only (Maximum Safety, Zero Reversals).';
+      const subTitleEl = document.querySelector('.brand-subtitle');
+      if (subTitleEl) {
+        subTitleEl.innerHTML = 'Initial-Only Strategy &bull; $1.00 Snipe (89–91&cent;) &bull; Maximum Safety (Zero Reversals, Single-Trade Stop)';
       }
     } else {
       modePill.className = 'status-pill mode-paper';

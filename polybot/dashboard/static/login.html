@@ -310,7 +310,9 @@
       submitBtn.querySelector('span').textContent = 'Verifying...';
 
       try {
-        const res = await fetch('/api/auth/login', {
+        const m = window.location.pathname.match(/^\/(paper\d*)/);
+        const apiBase = m ? ('/' + m[1]) : '';
+        const res = await fetch(`${apiBase}/api/auth/login`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ username, password })
@@ -320,7 +322,7 @@
 
         if (res.ok && data.status === 'ok') {
           // Success: redirect to dashboard
-          window.location.href = '/';
+          window.location.href = apiBase ? `${apiBase}/` : '/';
         } else {
           showError(data.message || 'Authentication failed. Please verify credentials.');
           submitBtn.disabled = false;

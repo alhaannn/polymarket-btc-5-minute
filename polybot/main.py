@@ -69,6 +69,7 @@ async def run_paper(
     reset: bool = False,
     paused: bool = False,
     mode: Optional[str] = None,
+    db_name: Optional[str] = None,
 ) -> None:
     import math
     from polybot.tz import ist_today_str
@@ -93,12 +94,24 @@ async def run_paper(
     is_live = exec_mode == "live"
     if is_live:
         config.live.is_live_requested = True
-    db_name = "live_ledger.db" if is_live else "paper_ledger.db"
-    mode_label = "LIVE TRADING" if is_live else "PAPER MODE"
+
+    db_name_env = os.getenv("LEDGER_DB_NAME")
+    if db_name:
+        ledger_db_name = db_name
+    elif db_name_env:
+        ledger_db_name = db_name_env
+    elif exec_mode == "paper1":
+        ledger_db_name = "paper1_ledger.db"
+    elif is_live:
+        ledger_db_name = "live_ledger.db"
+    else:
+        ledger_db_name = "paper_ledger.db"
+
+    mode_label = "LIVE TRADING" if is_live else ("PAPER 1 (INITIAL ONLY)" if exec_mode == "paper1" else "PAPER MODE")
 
     starting_equity_usd = float(os.getenv("STARTING_EQUITY_USD", "11.0"))
     capital_mgr = CapitalManager(
-        db_path=config.recorder.data_dir / db_name,
+        db_path=config.recorder.data_dir / ledger_db_name,
         starting_equity_usd=starting_equity_usd,
         sizing_mode=sizing_mode,
     )
@@ -108,7 +121,7 @@ async def run_paper(
         sizing_mode=sizing_mode,
     )
 
-    ledger = TradeLedger(config.recorder.data_dir / db_name)
+    ledger = TradeLedger(config.recorder.data_dir / ledger_db_name)
 
     dash_state = DashboardState()
     dash_state.execution_mode = exec_mode
@@ -1095,7 +1108,9 @@ def main() -> None:
     paper_parser.add_argument("--demo", action="store_true", help="Simulate 5m market price & probability swings to test UI and strategy")
     paper_parser.add_argument("--reset", action="store_true", help="Reset all trades and capital state to starting balance")
     paper_parser.add_argument("--paused", action="store_true", help="Start bot in paused state awaiting manual resume")
-    paper_parser.add_argument("--mode", choices=["paper", "live"], default=None, help="Execution mode override (paper or live)")
+    paper_parser.add_argument("--mode", type=str, default=None, help="Execution mode override (paper, paper1, or live)")
+    paper_parser.add_argument("--db-name", type=str, default=None, help="Custom ledger database filename (e.g. paper1_ledger.db)")
+    paper_parser.add_argument("--env-file", type=str, default=None, help="Path to custom .env file (e.g. .env.paper1)")
 
     # Dashboard standalone command
     dash_parser = subparsers.add_parser("dashboard", help="Run local web dashboard standalone")
@@ -1114,7 +1129,7 @@ def main() -> None:
     args = parser.parse_args()
 
     setup_logging(verbose=getattr(args, "verbose", False))
-    config = PolybotConfig.load()
+    config = PolybotConfig.load(env_file=getattr(args, "env_file", None))
 
     if args.command == "recorder":
         if args.data_dir:
@@ -1141,6 +1156,7 @@ def main() -> None:
                     reset=getattr(args, "reset", False),
                     paused=getattr(args, "paused", False),
                     mode=getattr(args, "mode", None),
+                    db_name=getattr(args, "db_name", None),
                 )
             )
         except KeyboardInterrupt:

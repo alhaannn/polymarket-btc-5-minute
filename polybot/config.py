@@ -310,8 +310,15 @@ class PolybotConfig:
     dashboard: DashboardConfig = field(default_factory=DashboardConfig.from_env)
 
     @classmethod
-    def load(cls, config_path: Optional[str | Path] = None) -> PolybotConfig:
+    def load(cls, config_path: Optional[str | Path] = None, env_file: Optional[str | Path] = None) -> PolybotConfig:
         """Loads configuration from YAML if exists, layered with env vars."""
+        target_env = env_file or os.getenv("ENV_FILE")
+        if target_env and Path(target_env).exists():
+            try:
+                from dotenv import load_dotenv
+                load_dotenv(dotenv_path=Path(target_env), override=True)
+            except ImportError:
+                pass
         cfg = cls()
         if config_path:
             p = Path(config_path)
