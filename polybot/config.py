@@ -111,6 +111,9 @@ class StrategyConfig:
     taker_fee_rate: float = 0.001
     maker_fee_rate: float = 0.000
 
+    # Monitored assets
+    monitored_assets: List[str] = field(default_factory=lambda: ["btc"])
+
     # New 5-minute Reversal Strategy (NEW_STRATEGY.md)
     initial_stake_usd: float = 1.0
     reversal_stake_usd: float = 10.0
@@ -118,6 +121,13 @@ class StrategyConfig:
     initial_prob_max: float = 0.91
     reversal_prob_min: float = 0.85
     reversal_prob_max: float = 0.90
+    max_reversal_stages: int = 2
+    reversal_stage2_prob_min: float = 0.65
+    reversal_stage2_prob_max: float = 0.85
+    reversal_spot_lead_usd: float = 15.0
+    reversal_persistence_sec: float = 1.5
+    ladder_max_window_risk_usd: float = 10.0
+    recovery_stage2_max_time_sec: float = 280.0
     reversal_multiplier: float = 10.0
     reversal_window_start_sec: float = 180.0
     initial_snipe_end_sec: float = 210.0
@@ -170,12 +180,20 @@ class StrategyConfig:
             max_slippage=_get_env_val("MAX_SLIPPAGE", 0.015, float),
             taker_fee_rate=_get_env_val("TAKER_FEE_RATE", 0.001, float),
             maker_fee_rate=_get_env_val("MAKER_FEE_RATE", 0.000, float),
+            monitored_assets=[a.strip().lower() for a in os.getenv("MONITORED_ASSETS", "btc").split(",") if a.strip()] or ["btc"],
             initial_stake_usd=_get_env_val("INITIAL_STAKE_USD", 1.0, float),
             reversal_stake_usd=_get_env_val("REVERSAL_STAKE_USD", 10.0, float),
             initial_prob_min=_get_env_val("INITIAL_PROB_MIN", 0.89, float),
             initial_prob_max=_get_env_val("INITIAL_PROB_MAX", 0.91, float),
-            reversal_prob_min=_get_env_val("REVERSAL_PROB_MIN", 0.85, float),
-            reversal_prob_max=_get_env_val("REVERSAL_PROB_MAX", 0.95, float),
+            reversal_prob_min=_get_env_val("REVERSAL_PROB_MIN", 0.65 if os.getenv("RECOVERY_FLIP_MODE", "fixed") == "precision" else 0.85, float),
+            reversal_prob_max=_get_env_val("REVERSAL_PROB_MAX", 0.85 if os.getenv("RECOVERY_FLIP_MODE", "fixed") == "precision" else 0.95, float),
+            max_reversal_stages=_get_env_val("MAX_REVERSAL_STAGES", 2, int),
+            reversal_stage2_prob_min=_get_env_val("REVERSAL_STAGE2_PROB_MIN", 0.65, float),
+            reversal_stage2_prob_max=_get_env_val("REVERSAL_STAGE2_PROB_MAX", 0.85, float),
+            reversal_spot_lead_usd=_get_env_val("REVERSAL_SPOT_LEAD_USD", 15.0, float),
+            reversal_persistence_sec=_get_env_val("REVERSAL_PERSISTENCE_SEC", 1.5, float),
+            ladder_max_window_risk_usd=_get_env_val("LADDER_MAX_WINDOW_RISK_USD", 10.0, float),
+            recovery_stage2_max_time_sec=_get_env_val("RECOVERY_STAGE2_MAX_TIME_SEC", 280.0, float),
             reversal_multiplier=_get_env_val("REVERSAL_MULTIPLIER", 10.0, float),
             reversal_window_start_sec=_get_env_val("REVERSAL_WINDOW_START_SEC", 180.0, float),
             initial_snipe_end_sec=_get_env_val("INITIAL_SNIPE_END_SEC", 210.0, float),

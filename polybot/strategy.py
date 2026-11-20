@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from polybot.config import StrategyConfig
+from polybot.execution.fees import calculate_polymarket_5m_crypto_fee
 from polybot.feeds.clob_ws import TokenOrderBook
 from polybot.feeds.health import FeedHealthTracker
 from polybot.filters import FilterEngine, FilterResult
@@ -362,6 +363,15 @@ class ReversalStrategy(BaseStrategy):
         self.early_exit_loss: float = 0.0
         self.early_exit_received: float = 0.0
         self.reversal_order_placed: bool = False
+        self.reversal_stage: int = 0
+        self.shares_held: Dict[str, float] = {"Up": 0.0, "Down": 0.0}
+        self.cost_spent: Dict[str, float] = {"Up": 0.0, "Down": 0.0}
+        self.total_spent_usd: float = 0.0
+        self.current_side: Optional[str] = None
+        self.spot_lead_start_ts: Dict[str, float] = {"Up": 0.0, "Down": 0.0}
+        self.last_signal_spent: float = 0.0
+        self.last_signal_shares: float = 0.0
+        self.last_signal_side: Optional[str] = None
         self.dynamic_initial_usd: Optional[float] = None
         self.dynamic_reversal_usd: Optional[float] = None
         self.rejection_cooldown_until: Dict[str, float] = {}
@@ -385,6 +395,15 @@ class ReversalStrategy(BaseStrategy):
         self.early_exit_loss = 0.0
         self.early_exit_received = 0.0
         self.reversal_order_placed = False
+        self.reversal_stage = 0
+        self.shares_held = {"Up": 0.0, "Down": 0.0}
+        self.cost_spent = {"Up": 0.0, "Down": 0.0}
+        self.total_spent_usd = 0.0
+        self.current_side = None
+        self.spot_lead_start_ts = {"Up": 0.0, "Down": 0.0}
+        self.last_signal_spent = 0.0
+        self.last_signal_shares = 0.0
+        self.last_signal_side = None
         self.rejection_cooldown_until = {}
         self.last_tick_ts = 0.0
 
@@ -410,12 +429,96 @@ class ReversalStrategy(BaseStrategy):
             self.initial_order_id = None
             self.initial_shares = 0.0
             self.initial_cost_usd = 0.0
-        elif signal_type == "REVERSAL":
+            self.shares_held = {"Up": 0.0, "Down": 0.0}
+            self.cost_spent = {"Up": 0.0, "Down": 0.0}
+            self.total_spent_usd = 0.0
+            self.current_side = None
+            self.reversal_stage = 0
+            self.last_signal_spent = 0.0
+            self.last_signal_shares = 0.0
+            self.last_signal_side = None
+        elif signal_type in ("REVERSAL", "REVERSAL_1"):
             self.reversal_order_placed = False
+            if self.reversal_stage == 1:
+                self.reversal_stage = 0
+                if self.last_signal_side:
+                    self.shares_held[self.last_signal_side] = max(0.0, self.shares_held.get(self.last_signal_side, 0.0) - self.last_signal_shares)
+                    self.cost_spent[self.last_signal_side] = max(0.0, self.cost_spent.get(self.last_signal_side, 0.0) - self.last_signal_spent)
+                    self.total_spent_usd = max(0.0, self.total_spent_usd - self.last_signal_spent)
+                    self.last_signal_spent = 0.0
+                    self.last_signal_shares = 0.0
+                    self.last_signal_side = None
+        elif signal_type == "REVERSAL_2":
+            if self.reversal_stage == 2:
+                self.reversal_stage = 1
+                if self.last_signal_side:
+                    self.shares_held[self.last_signal_side] = max(0.0, self.shares_held.get(self.last_signal_side, 0.0) - self.last_signal_shares)
+                    self.cost_spent[self.last_signal_side] = max(0.0, self.cost_spent.get(self.last_signal_side, 0.0) - self.last_signal_spent)
+                    self.total_spent_usd = max(0.0, self.total_spent_usd - self.last_signal_spent)
+                    self.last_signal_spent = 0.0
+                    self.last_signal_shares = 0.0
+                    self.last_signal_side = None
         elif signal_type == "EARLY_EXIT":
             self.early_exit_placed = False
             self.early_exit_loss = 0.0
             self.early_exit_received = 0.0
+
+    def check_spot_lead_confirmed(
+        self,
+        side: str,
+        current_spot: float,
+        timestamp_sec: float,
+    ) -> bool:
+        """
+        Validates whether Binance spot price leads the strike price in the direction of 'side'
+        by at least reversal_spot_lead_usd, held continuously for reversal_persistence_sec.
+        If strike_price_K is None or 0, returns True (e.g. tests without strike).
+        """
+        if self.strike_price_K is None or self.strike_price_K <= 0:
+            return True
+
+        min_lead = getattr(self.config, "reversal_spot_lead_usd", 15.0)
+        persistence = getattr(self.config, "reversal_persistence_sec", 1.5)
+
+        lead = (current_spot - self.strike_price_K) if side == "Up" else (self.strike_price_K - current_spot)
+        if lead >= min_lead:
+            first_ts = self.spot_lead_start_ts.get(side, 0.0)
+            if first_ts <= 0.0:
+                self.spot_lead_start_ts[side] = timestamp_sec
+                return persistence <= 0.0
+            return (timestamp_sec - first_ts) >= persistence
+        else:
+            self.spot_lead_start_ts[side] = 0.0
+            return False
+
+    def calculate_exact_recovery_stake(
+        self,
+        target_side: str,
+        entry_price: float,
+    ) -> float:
+        """
+        Calculates exact base stake to achieve net $0.00 recovery across window,
+        crediting any shares already held on target_side.
+        Formula:
+          deficit = max(0, total_spent_usd - shares_held[target_side] * 1.0)
+          base_stake = deficit / ( (1 / (entry_price * (1 + 0.07*(1 - entry_price)))) - 1 )
+        """
+        held_shares = self.shares_held.get(target_side, 0.0)
+        expected_payout_held = held_shares * 1.0
+        deficit = max(0.0, self.total_spent_usd - expected_payout_held)
+        if deficit <= 0.01:
+            return 1.0
+
+        fee_rate = 0.07 * (1.0 - entry_price)
+        effective_cost_per_share = entry_price * (1.0 + fee_rate)
+        if effective_cost_per_share >= 1.0:
+            return 1.0
+        denom = (1.0 / effective_cost_per_share) - 1.0
+        if denom <= 0.02:
+            return 1.0
+
+        base_stake = deficit / denom
+        return max(1.0, round(base_stake, 2))
 
     def on_tick(
         self,
@@ -514,7 +617,7 @@ class ReversalStrategy(BaseStrategy):
                         )
                         continue
 
-                    fee = spent * self.config.taker_fee_rate
+                    fee = calculate_polymarket_5m_crypto_fee(shares, avg_price)
                     order_id = f"init-{int(timestamp_sec * 1000)}"
 
                     self.initial_order_placed = True
@@ -523,6 +626,11 @@ class ReversalStrategy(BaseStrategy):
                     self.initial_order_ts = timestamp_sec
                     self.initial_shares = shares
                     self.initial_cost_usd = spent
+                    self.shares_held[side] = shares
+                    self.cost_spent[side] = spent
+                    self.total_spent_usd = spent
+                    self.current_side = side
+                    self.reversal_stage = 0
 
                     log.info(
                         "REVERSAL_STRAT INITIAL BUY %s @ %.3f x %.2f shares ($%.2f) at elapsed=%.1fs (prob=%.3f)",
@@ -602,19 +710,43 @@ class ReversalStrategy(BaseStrategy):
                                 data_receipt_ts=receipt_ts,
                             )
 
-            # Phase B: Check REVERSAL Entry (Shield 3: Precision Recovery Flip & Shield 4 Guardrails)
-            if enable_rev and not getattr(self, "reversal_order_placed", False):
+            # Phase B: Check REVERSAL Entry (Shield 3: Multi-Stage Precision Recovery Ladder & Shield 4 Guardrails)
+            max_stages = getattr(self.config, "max_reversal_stages", 2)
+            if enable_rev and self.reversal_stage < max_stages:
                 # If early exit is enabled, reversal only triggers AFTER early exit has executed!
                 if early_exit_enabled and not getattr(self, "early_exit_placed", False):
                     return None
 
-                if self.rejection_cooldown_until.get("REVERSAL", 0.0) > timestamp_sec:
+                flip_mode = getattr(self.config, "recovery_flip_mode", "fixed")
+
+                # Determine target leg and direction based on current reversal stage
+                if self.reversal_stage == 0:
+                    target_side = opp_side
+                    target_book = opp_book
+                    target_prob = opp_prob
+                    counterpart_p = init_current_prob
+                    p_min = self.config.reversal_prob_min
+                    p_max = self.config.reversal_prob_max
+                    max_cutoff = getattr(self.config, "recovery_max_time_sec", 275.0)
+                    sig_type = "REVERSAL_1" if flip_mode == "precision" else "REVERSAL"
+                elif self.reversal_stage == 1:
+                    target_side = self.initial_side
+                    target_book = initial_book
+                    target_prob = init_current_prob
+                    counterpart_p = opp_prob
+                    p_min = getattr(self.config, "reversal_stage2_prob_min", self.config.reversal_prob_min)
+                    p_max = getattr(self.config, "reversal_stage2_prob_max", self.config.reversal_prob_max)
+                    max_cutoff = getattr(self.config, "recovery_stage2_max_time_sec", 280.0)
+                    sig_type = "REVERSAL_2"
+                else:
                     return None
 
-                # Shield 4 Guardrail A: Hard Timing Cutoff (no entries after recovery_max_time_sec, default 280.0s)
-                recovery_max_time = getattr(self.config, "recovery_max_time_sec", 280.0)
-                if elapsed > recovery_max_time:
-                    log.debug("Reversal rejected: elapsed %.1fs exceeds recovery max time %.1fs", elapsed, recovery_max_time)
+                if self.rejection_cooldown_until.get(sig_type, 0.0) > timestamp_sec or self.rejection_cooldown_until.get("REVERSAL", 0.0) > timestamp_sec:
+                    return None
+
+                # Hard Timing Cutoff
+                if elapsed > max_cutoff:
+                    log.debug("Reversal rejected: elapsed %.1fs exceeds cutoff %.1fs", elapsed, max_cutoff)
                     return None
 
                 # Reversal debounce
@@ -622,33 +754,39 @@ class ReversalStrategy(BaseStrategy):
                 if debounce_sec > 0 and (timestamp_sec - self.initial_order_ts) < debounce_sec:
                     return None
 
-                # Collapse check: initial side must have collapsed <= 0.35 (or early exit already confirmed it)
+                # Collapse check: counterpart side must have collapsed <= 0.35 (or early exit confirmed)
                 if not getattr(self, "early_exit_placed", False):
-                    if init_current_prob is not None and init_current_prob > 0.35:
+                    if counterpart_p is not None and counterpart_p > 0.35:
                         return None
 
                 # Spread safety guard: only block if synthetic spread is severely distorted (> 1.15)
-                if opp_prob is not None and init_current_prob is not None:
-                    if (opp_prob + init_current_prob) > 1.15:
+                if target_prob is not None and counterpart_p is not None:
+                    if (target_prob + counterpart_p) > 1.15:
                         return None
 
-                if opp_prob is not None and opp_book is not None:
-                    # Conviction check (e.g. 0.85 <= opp_prob <= 0.95)
-                    if self.config.reversal_prob_min <= opp_prob <= self.config.reversal_prob_max:
-                        # Precision Sizing Formula or Exact 10x Sizing ($1 -> $10, $2 -> $20)
-                        flip_mode = getattr(self.config, "recovery_flip_mode", "fixed")
-                        target_profit = getattr(self, "early_exit_loss", 0.0)
+                if target_prob is not None and target_book is not None:
+                    if p_min <= target_prob <= p_max:
+                        # Binance Spot Lead & Persistence confirmation
+                        if not self.check_spot_lead_confirmed(target_side, current_price, timestamp_sec):
+                            return None
+
                         budget_limit = self.dynamic_reversal_usd if self.dynamic_reversal_usd is not None else self.config.reversal_stake_usd
 
-                        if flip_mode == "precision" and target_profit > 0.10:
-                            opp_ask = opp_book.best_ask()
-                            if opp_ask and 0 < opp_ask < 1.0:
-                                est_return_rate = (1.0 / opp_ask) - 1.0 - self.config.taker_fee_rate
-                                needed_stake = target_profit / max(est_return_rate, 0.05)
-                            else:
-                                needed_stake = target_profit / 0.12
-                            reversal_stake = min(needed_stake, budget_limit)
-                            reversal_stake = max(1.0, round(reversal_stake, 2))
+                        if flip_mode == "precision":
+                            reversal_stake = self.calculate_exact_recovery_stake(target_side, target_prob)
+                            reversal_stake = min(reversal_stake, budget_limit)
+                            # Enforce cumulative window risk cap for precision ladder
+                            ladder_cap = getattr(self.config, "ladder_max_window_risk_usd", 10.0)
+                            remaining_window_risk = max(0.0, ladder_cap - self.total_spent_usd)
+                            if reversal_stake > remaining_window_risk:
+                                if remaining_window_risk >= 1.0:
+                                    reversal_stake = round(remaining_window_risk, 2)
+                                else:
+                                    log.info(
+                                        "Reversal rejected: window risk cap reached ($%.2f / $%.2f)",
+                                        self.total_spent_usd, ladder_cap
+                                    )
+                                    return None
                         else:
                             # Exact 10x Sizing ($1 initial -> $10 reversal, $2 initial -> $20 reversal)
                             reversal_mult = getattr(self.config, "reversal_multiplier", 10.0)
@@ -656,13 +794,13 @@ class ReversalStrategy(BaseStrategy):
                             reversal_stake = min(target_stake, budget_limit)
                             reversal_stake = max(1.0, reversal_stake)
 
-                        init_bids = initial_book.get_sorted_bids() if initial_book else None
-                        fill = opp_book.simulate_buy(reversal_stake, opposing_bids=init_bids)
+                        opposing = initial_book if target_side == opp_side else opp_book
+                        opp_bids = opposing.get_sorted_bids() if opposing else None
+                        fill = target_book.simulate_buy(reversal_stake, opposing_bids=opp_bids)
                         if fill is None:
                             log.info(
                                 "ReversalStrategy %s ask %.3f in reversal range [%.2f, %.2f] but depth thin for $%.2f",
-                                opp_side, opp_prob, self.config.reversal_prob_min, self.config.reversal_prob_max,
-                                reversal_stake
+                                target_side, target_prob, p_min, p_max, reversal_stake
                             )
                             return None
 
@@ -670,19 +808,27 @@ class ReversalStrategy(BaseStrategy):
                         # Price ceiling check on reversal
                         price_ceil = getattr(self.config, "reversal_price_ceiling", 0.930)
                         if avg_price > price_ceil + 1e-5:
-                            log.info("ReversalStrategy %s avg_price %.3f exceeds price ceiling %.3f", opp_side, avg_price, price_ceil)
+                            log.info("ReversalStrategy %s avg_price %.3f exceeds price ceiling %.3f", target_side, avg_price, price_ceil)
                             return None
 
-                        fee = spent * self.config.taker_fee_rate
+                        fee = calculate_polymarket_5m_crypto_fee(shares, avg_price)
+                        self.reversal_stage += 1
                         self.reversal_order_placed = True
+                        self.shares_held[target_side] = self.shares_held.get(target_side, 0.0) + shares
+                        self.cost_spent[target_side] = self.cost_spent.get(target_side, 0.0) + spent
+                        self.total_spent_usd += spent
+                        self.current_side = target_side
+                        self.last_signal_spent = spent
+                        self.last_signal_shares = shares
+                        self.last_signal_side = target_side
 
                         log.info(
-                            "REVERSAL_STRAT REVERSAL BUY %s @ %.3f x %.2f shares ($%.2f) at elapsed=%.1fs (opp_prob=%.3f, target_pnl=$%.2f, linked=%s)",
-                            opp_side, avg_price, shares, spent, elapsed, opp_prob, target_profit, self.initial_order_id
+                            "REVERSAL_STRAT %s BUY %s @ %.3f x %.2f shares ($%.2f) at elapsed=%.1fs (prob=%.3f, total_spent=$%.2f, linked=%s)",
+                            sig_type, target_side, avg_price, shares, spent, elapsed, target_prob, self.total_spent_usd, self.initial_order_id
                         )
                         return TradeSignal(
                             slug=f"btc-updown-5m-{self.window_start}",
-                            side=opp_side,
+                            side=target_side,
                             action="BUY",
                             order_type="taker",
                             price=avg_price,
@@ -690,13 +836,13 @@ class ReversalStrategy(BaseStrategy):
                             cost_usd=spent,
                             fee_usd=fee,
                             elapsed_sec=elapsed,
-                            model_prob=opp_prob,
+                            model_prob=target_prob,
                             expected_edge=0.0,
                             timestamp_sec=timestamp_sec,
-                            signal_type="REVERSAL",
+                            signal_type=sig_type,
                             linked_order_id=self.initial_order_id,
-                            trigger_prob=opp_prob,
-                            counterpart_prob=init_current_prob or 0.0,
+                            trigger_prob=target_prob,
+                            counterpart_prob=counterpart_p or 0.0,
                             data_receipt_ts=receipt_ts,
                         )
 

@@ -218,8 +218,11 @@ async def run_paper(
         await dash_server.start()
 
     # STRICT PRODUCTION RULE: Live mode is strictly isolated to BTC!
-    # Paper Mode enables full 6-market multi-asset parallel execution.
-    monitored_assets: List[str] = ["btc"] if is_live else ["btc", "eth", "sol", "doge", "xrp", "bnb"]
+    # Paper Mode follows MONITORED_ASSETS (defaults to BTC only to replicate live exactly)
+    cfg_assets = getattr(config.strategy, "monitored_assets", None) or ["btc"]
+    monitored_assets: List[str] = ["btc"] if is_live else [a.strip().lower() for a in cfg_assets if a.strip()]
+    if not monitored_assets:
+        monitored_assets = ["btc"]
 
     strategies: Dict[str, Any] = {}
     for a in monitored_assets:
@@ -258,8 +261,9 @@ async def run_paper(
                 health.record_tick("binance", t["price"], t["timestamp_ms"])
             multi_orch.on_tick(t)
 
+        bin_symbols = [f"{a.lower()}usdt" for a in monitored_assets]
         binance = BinanceFeed(
-            symbols=["btcusdt", "ethusdt", "solusdt", "dogeusdt", "xrpusdt", "bnbusdt"],
+            symbols=bin_symbols,
             on_tick=handle_binance_multiplex_tick,
         )
         await rtds.start()

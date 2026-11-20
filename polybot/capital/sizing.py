@@ -168,10 +168,13 @@ class DynamicTradeBudgetCalculator:
         # 2. Derive budget based on signal type
         sig_upper = signal_type.upper()
         if override_budget_usd is not None and override_budget_usd > 0:
-            calc_budget = float(round_half_up_to_whole_dollar(override_budget_usd))
+            if sig_upper in ("REVERSAL_1", "REVERSAL_2"):
+                calc_budget = round(float(override_budget_usd), 2)
+            else:
+                calc_budget = float(round_half_up_to_whole_dollar(override_budget_usd))
         elif sig_upper == "INITIAL":
             calc_budget = float(self.calculate_initial_budget(active_capital_usd))
-        elif sig_upper == "REVERSAL":
+        elif sig_upper in ("REVERSAL", "REVERSAL_1", "REVERSAL_2"):
             calc_budget = float(self.calculate_reversal_budget(active_capital_usd))
         else:
             return BudgetValidationResult(
@@ -180,7 +183,7 @@ class DynamicTradeBudgetCalculator:
                 calculated_budget_usd=0.0,
                 free_active_usd=free_active,
                 fee_estimate_usd=0.0,
-                reason=f"Unknown signal type: '{signal_type}'. Must be 'INITIAL' or 'REVERSAL'.",
+                reason=f"Unknown signal type: '{signal_type}'. Must be 'INITIAL', 'REVERSAL', 'REVERSAL_1', or 'REVERSAL_2'.",
             )
 
         fee_est = round(calc_budget * self.taker_fee_rate, 4)
@@ -210,9 +213,12 @@ class DynamicTradeBudgetCalculator:
 
         # 5. Check free active funds sufficiency
         if total_required > free_active + 1e-4:
-            # If adaptive clamping is enabled, attempt to downsize whole-dollar budget to available free funds
+            # If adaptive clamping is enabled, attempt to downsize budget to available free funds
             if allow_adaptive_clamping:
-                max_affordable = math.floor((free_active + 1e-4) / (1.0 + self.taker_fee_rate))
+                if sig_upper in ("REVERSAL_1", "REVERSAL_2"):
+                    max_affordable = math.floor(((free_active + 1e-4) / (1.0 + self.taker_fee_rate)) * 100) / 100.0
+                else:
+                    max_affordable = float(math.floor((free_active + 1e-4) / (1.0 + self.taker_fee_rate)))
                 if max_affordable >= self.min_order_usd:
                     approved_budget = float(max_affordable)
                     clamped_fee = round(approved_budget * self.taker_fee_rate, 4)
