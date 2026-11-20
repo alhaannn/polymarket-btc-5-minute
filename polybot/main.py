@@ -966,14 +966,14 @@ async def run_paper(
                         else:
                             # PAPER MODE: Route to compartmentalized MarketCell and check $100 harvest
                             cell = multi_orch.cell_manager.get_cell(slug_asset)
-                            is_rev = settled_pos.signal_type == "REVERSAL"
+                            is_rev = settled_pos.signal_type.startswith("REVERSAL")
                             cell.record_trade_result(settled_pos.realized_pnl_usd, is_reversal=is_rev)
 
                             harvest = multi_orch.cell_manager.check_and_trigger_harvest(slug_asset)
                             if harvest:
                                 dash_state.add_log(
                                     "HARVEST",
-                                    f"[{slug_asset.upper()}] $100 TARGET GRADUATED! Self-seeded $12.00, Revived {harvest.halted_cells_revived} cells (${harvest.halted_cells_revived * 12:.2f}), Swept ${harvest.amount_swept_usd:.2f} to Binance Cold Storage!"
+                                    f"[{slug_asset.upper()}] $100 TARGET GRADUATED! Self-seeded ${harvest.self_seed_usd:.2f}, Revived {len(harvest.halted_revived_assets)} cells (${harvest.revival_funds_usd:.2f}), Swept ${harvest.sweep_amount_usd:.2f} to Binance Cold Storage!"
                                 )
 
                             multi_orch.arbiter.release(slug_asset)
