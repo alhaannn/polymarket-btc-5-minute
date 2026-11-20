@@ -135,7 +135,7 @@ class StrategyConfig:
     max_initial_orders_per_window: int = 1
     max_reversal_orders_per_initial: int = 1
     reporting_timezone: str = "local"
-    prime_hours_only: bool = True
+    prime_hours_only: bool = False
     enable_reversals: bool = True
     price_ceiling: float = 0.910
     reversal_price_ceiling: float = 0.930
@@ -201,7 +201,7 @@ class StrategyConfig:
             max_initial_orders_per_window=_get_env_val("MAX_INITIAL_ORDERS_PER_WINDOW", 1, int),
             max_reversal_orders_per_initial=_get_env_val("MAX_REVERSAL_ORDERS_PER_INITIAL", 1, int),
             reporting_timezone=os.getenv("REPORTING_TIMEZONE", "local"),
-            prime_hours_only=_get_env_val("PRIME_HOURS_ONLY", True, bool),
+            prime_hours_only=_get_env_val("PRIME_HOURS_ONLY", False, bool),
             enable_reversals=_get_env_val("ENABLE_REVERSALS", True, bool),
             price_ceiling=_get_env_val("PRICE_CEILING", 0.910, float),
             reversal_price_ceiling=_get_env_val("REVERSAL_PRICE_CEILING", 0.930, float),

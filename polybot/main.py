@@ -237,8 +237,10 @@ async def run_paper(
     from polybot.multi_market import MultiMarketOrchestrator
     from polybot.capital.cell import CellStatus
     multi_orch = MultiMarketOrchestrator(assets=monitored_assets)
-    if not is_live:
+    if not is_live and len(monitored_assets) > 1:
         dash_state.update_multi_market(multi_orch.get_matrix_snapshot())
+    else:
+        dash_state.update_multi_market(None)
 
     rtds = None
     binance = None
@@ -640,7 +642,7 @@ async def run_paper(
                 down_bid=down_bid,
                 latency_ms=config.strategy.latency_ms,
             )
-            if not is_live:
+            if not is_live and len(monitored_assets) > 1:
                 dash_state.update_multi_market(multi_orch.get_matrix_snapshot())
 
             # Check trigger range status for UI display

@@ -578,7 +578,8 @@ function renderState(state) {
     document.getElementById('card-mm-asset-ledger'),
     document.getElementById('card-mm-sweeper-ledger')
   ];
-  const showMultiMarket = !isLive && !!state.multi_market;
+  const isMultiAsset = state.multi_market && Object.keys(state.multi_market.matrix || {}).length > 1;
+  const showMultiMarket = !isLive && !!state.multi_market && isMultiAsset;
   mmSections.forEach(el => {
     if (el) el.style.display = showMultiMarket ? '' : 'none';
   });

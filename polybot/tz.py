@@ -133,7 +133,7 @@ def compute_schedule_state(
         "phase": phase,
         "reason": reason,
         "prime_hours_only": prime_hours_only,
-        "schedule_window": "13:30 – 01:00 IST",
+        "schedule_window": "13:30 – 01:00 IST" if prime_hours_only else "24/7 CONTINUOUS",
         "current_time_ist": ist_time_str(now_ts),
         "session_start_ts": session_start_ts,
         "session_start_str": ist_time_str(session_start_ts),
