@@ -4,6 +4,7 @@ Risk management, circuit breakers, and anomaly guards for polybot.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -119,9 +120,14 @@ class RiskManager:
             return False, f"Consecutive loss cooldown active: {windows_remaining} windows remaining (~{windows_remaining * 5}m)"
 
         # 3. Dynamic Daily loss limit check
-        effective_limit = self.get_effective_daily_loss_limit(active_capital_usd)
-        if self.daily_pnl <= -abs(effective_limit):
-            return False, f"Daily loss limit reached: PnL ${self.daily_pnl:.2f} <= -${effective_limit:.2f}"
+        disable_daily = (
+            getattr(self.config, "disable_daily_shutdown", False)
+            or getattr(self.config, "daily_loss_limit_usd", 25.0) <= 0
+        )
+        if not disable_daily:
+            effective_limit = self.get_effective_daily_loss_limit(active_capital_usd)
+            if self.daily_pnl <= -abs(effective_limit):
+                return False, f"Daily loss limit reached: PnL ${self.daily_pnl:.2f} <= -${effective_limit:.2f}"
 
         # 4. Max trades per day check
         if self.daily_trades >= self.config.max_trades_per_day:

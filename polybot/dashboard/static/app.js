@@ -325,7 +325,7 @@ function renderState(state) {
       modePill.title = 'Paper trading mode: Initial-Only (Maximum Safety, Zero Reversals).';
       const subTitleEl = document.querySelector('.brand-subtitle');
       if (subTitleEl) {
-        subTitleEl.innerHTML = 'Initial-Only Strategy &bull; $1.00 Snipe (89–91&cent;) &bull; Maximum Safety (Zero Reversals, Single-Trade Stop)';
+        subTitleEl.innerHTML = 'Initial-Only Strategy &bull; $5.00 Flat Snipe (89–91&cent;) &bull; Restricted Hours (13:30–01:00 IST) &bull; Zero Reversals';
       }
     } else {
       modePill.className = 'status-pill mode-paper';

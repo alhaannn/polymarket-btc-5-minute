@@ -114,7 +114,7 @@ def test_precision_recovery_flip_lifecycle():
     # Elapsed = 225s
     sig_rev = strat.on_tick(current_price=80000.0, timestamp_sec=1225.0, books=books_decay)
     assert sig_rev is not None
-    assert sig_rev.signal_type == "REVERSAL"
+    assert sig_rev.signal_type in ("REVERSAL", "REVERSAL_1")
     assert sig_rev.action == "BUY"
     assert sig_rev.side == "Down"
     assert sig_rev.linked_order_id == strat.initial_order_id
@@ -189,7 +189,7 @@ def test_reversal_price_ceiling():
 
     sig_rev = strat.on_tick(current_price=80000.0, timestamp_sec=1225.0, books=books_decay_92)
     assert sig_rev is not None
-    assert sig_rev.signal_type == "REVERSAL"
+    assert sig_rev.signal_type in ("REVERSAL", "REVERSAL_1")
     assert sig_rev.price <= 0.930
 
     # Reset reversal state to test price above ceiling

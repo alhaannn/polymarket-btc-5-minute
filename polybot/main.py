@@ -248,8 +248,12 @@ async def run_paper(
     strat = strategies["btc"]
 
     from polybot.multi_market import MultiMarketOrchestrator
-    from polybot.capital.cell import CellStatus
-    multi_orch = MultiMarketOrchestrator(assets=monitored_assets)
+    from polybot.capital.cell import CellStatus, MarketCellManager
+    init_cell_cents = int(round(starting_equity_usd * 100)) if len(monitored_assets) == 1 else 1200
+    multi_orch = MultiMarketOrchestrator(
+        assets=monitored_assets,
+        cell_manager=MarketCellManager(assets=monitored_assets, initial_cell_capital_cents=init_cell_cents),
+    )
     if not is_live and len(monitored_assets) > 1:
         dash_state.update_multi_market(multi_orch.get_matrix_snapshot())
     else:
@@ -692,16 +696,19 @@ async def run_paper(
                     # STRICT LIVE TRADING: ONLY BTC!
                     cur_price = health.chainlink.last_price or 0.0
                     if isinstance(strat, ReversalStrategy):
-                        init_b, rev_b = budget_calc.get_budgets(capital_mgr.state.active_capital)
-                        open_exp = engine.get_open_exposure()
-                        if strat.initial_order_placed or open_exp > 0:
-                            exec_rev = budget_calc.get_executable_reversal_budget(
-                                capital_mgr.state.active_capital,
-                                open_exposure_usd=open_exp,
-                            )
-                            if exec_rev >= budget_calc.min_order_usd:
-                                rev_b = exec_rev
-                        strat.set_dynamic_budgets(init_b, rev_b)
+                        if sizing_mode == "fixed":
+                            strat.set_dynamic_budgets(float(config.strategy.initial_stake_usd), float(config.strategy.reversal_stake_usd))
+                        else:
+                            init_b, rev_b = budget_calc.get_budgets(capital_mgr.state.active_capital)
+                            open_exp = engine.get_open_exposure()
+                            if strat.initial_order_placed or open_exp > 0:
+                                exec_rev = budget_calc.get_executable_reversal_budget(
+                                    capital_mgr.state.active_capital,
+                                    open_exposure_usd=open_exp,
+                                )
+                                if exec_rev >= budget_calc.min_order_usd:
+                                    rev_b = exec_rev
+                            strat.set_dynamic_budgets(init_b, rev_b)
 
                     sig = strat.on_tick(cur_price, now, clob.side_books, health)
                     if sig:
@@ -824,8 +831,12 @@ async def run_paper(
                         if cell_a.status == CellStatus.HALTED_DEPLETED:
                             continue
 
-                        init_b = cell_a.get_initial_budget()
-                        rev_b = cell_a.get_reversal_budget()
+                        if sizing_mode == "fixed":
+                            init_b = float(config.strategy.initial_stake_usd)
+                            rev_b = float(config.strategy.reversal_stake_usd)
+                        else:
+                            init_b = cell_a.get_initial_budget()
+                            rev_b = cell_a.get_reversal_budget()
                         if hasattr(strat_a, "set_dynamic_budgets"):
                             strat_a.set_dynamic_budgets(init_b, rev_b)
 

@@ -68,3 +68,46 @@ def test_initial_only_entry_and_zero_reversals():
         )
         # ZERO reversals should be placed!
         assert sig_rev is None, f"Expected None but got reversal signal {sig_rev} at {t}"
+
+
+def test_initial_only_5_dollar_stake_and_prime_hours():
+    """Initial-Only with $5.00 stake and restricted prime hours only."""
+    cfg = StrategyConfig(
+        strategy_name="reversal",
+        initial_stake_usd=5.00,
+        reversal_stake_usd=0.00,
+        initial_prob_min=0.89,
+        initial_prob_max=0.91,
+        early_exit=False,
+        enable_reversals=False,
+        max_reversal_stages=0,
+        prime_hours_only=True,
+        entry_start_sec=180.0,
+        entry_end_sec=210.0,
+    )
+    strat = ReversalStrategy(cfg)
+    strat.set_dynamic_budgets(initial_usd=5.0, reversal_usd=0.0)
+
+    # 1. Non-prime hour: 06:00 IST (timestamp 1795134600.0)
+    strat.reset_window(window_start=1795134600, strike_price_K=65000.0)
+    books_np = create_mock_books(up_ask=0.90, down_ask=0.10)
+    sig_np = strat.on_tick(
+        current_price=65100.0,
+        timestamp_sec=1795134600.0 + 190.0,
+        books=books_np,
+    )
+    # Blocked by restricted prime hours
+    assert sig_np is None
+
+    # 2. Prime hour: 15:00 IST (timestamp 1795167000)
+    strat.reset_window(window_start=1795167000, strike_price_K=65000.0)
+    strat.set_dynamic_budgets(initial_usd=5.0, reversal_usd=0.0)
+    books_prime = create_mock_books(up_ask=0.90, down_ask=0.10)
+    sig_prime = strat.on_tick(
+        current_price=65100.0,
+        timestamp_sec=1795167000.0 + 190.0,
+        books=books_prime,
+    )
+    assert sig_prime is not None
+    assert sig_prime.signal_type == "INITIAL"
+    assert pytest.approx(sig_prime.cost_usd, abs=0.05) == 5.00

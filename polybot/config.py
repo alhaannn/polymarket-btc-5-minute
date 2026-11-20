@@ -232,6 +232,7 @@ class RiskConfig:
     sizing_mode: str = "fixed"  # "fixed" or "fractional_kelly"
     kelly_fraction: float = 0.25
     kelly_max_stake_usd: float = 15.0
+    disable_daily_shutdown: bool = False
 
     @classmethod
     def from_env(cls) -> RiskConfig:
@@ -247,6 +248,7 @@ class RiskConfig:
             sizing_mode=os.getenv("SIZING_MODE", "fixed"),
             kelly_fraction=_get_env_val("KELLY_FRACTION", 0.25, float),
             kelly_max_stake_usd=_get_env_val("KELLY_MAX_STAKE_USD", 15.0, float),
+            disable_daily_shutdown=_get_env_val("DISABLE_DAILY_SHUTDOWN", False, bool),
         )
 
 
