@@ -171,6 +171,9 @@ async def run_paper(
     client = PolymarketClient(config.feeds.gamma_rest_url, config.feeds.clob_rest_url)
     health = FeedHealthTracker(config.feeds.max_feed_staleness_sec, max_divergence_pct=config.feeds.max_divergence_pct)
     risk = RiskManager(config.risk)
+    risk.hydrate_session_trades(ledger.get_recent_trades(limit=500))
+    dash_state.session_shutdown_active = risk.session_shutdown_active
+    dash_state.session_shutdown_reason = risk.session_shutdown_reason
     sizer = PositionSizer(config.risk, default_stake_usd=config.strategy.stake_usd)
     session_mgr = MarketSessionManager(
         window_duration_sec=300.0,
@@ -684,6 +687,9 @@ async def run_paper(
 
             # Check for trade signal if not paused
             if not is_paused:
+                risk._check_day_rollover(now)
+                dash_state.session_shutdown_active = risk.session_shutdown_active
+                dash_state.session_shutdown_reason = risk.session_shutdown_reason
                 today = ist_today_str()
                 # Check Option B Reserve Release for new trading day (Roadmap Phase 6)
                 activated, released_usd, _ = capital_mgr.check_and_activate_next_day_reserve(today)
@@ -875,6 +881,28 @@ async def run_paper(
                                 )
                                 continue
 
+                            enforce_paper_risk = (
+                                exec_mode == "paper1"
+                                or getattr(config.risk, "session_max_loss_usd", None) is not None
+                                or getattr(config.risk, "session_profit_target_usd", None) is not None
+                                or getattr(config.risk, "trailing_arm_usd", None) is not None
+                            )
+                            if enforce_paper_risk:
+                                risk.sync_open_exposure(engine.get_open_exposure())
+                                allowed, reason = risk.check_trade_allowed(
+                                    sig.cost_usd,
+                                    current_window_idx,
+                                    active_capital_usd=capital_mgr.state.active_capital,
+                                    current_ts=now,
+                                )
+                                if not allowed:
+                                    if hasattr(strat_a, "on_order_rejected"):
+                                        strat_a.on_order_rejected(sig.signal_type, cooldown_sec=3.0, current_ts=now)
+                                    dash_state.session_shutdown_active = risk.session_shutdown_active
+                                    dash_state.session_shutdown_reason = risk.session_shutdown_reason
+                                    dash_state.add_log("SHUTDOWN" if risk.session_shutdown_active else "REJECTED", f"[{a.upper()}] Trade blocked: {reason}")
+                                    continue
+
                             fleet_equity = multi_orch.cell_manager.total_fleet_equity_usd
                             if not multi_orch.arbiter.can_acquire(a, fleet_equity):
                                 dash_state.add_log(
@@ -903,7 +931,7 @@ async def run_paper(
                                 token_id=tok_id,
                             )
                             engine.submit_order(order)
-                            risk.record_trade_placed(sig.cost_usd)
+                            risk.record_trade_placed(sig.cost_usd, current_ts=now)
                             open_trades_to_settle.append({
                                 "slug": sig.slug,
                                 "order_id": order.order_id,
@@ -946,7 +974,12 @@ async def run_paper(
                 if winner:
                     settled_positions = engine.settle_window_all(slug, winner, now)
                     for settled_pos in settled_positions:
-                        risk.record_trade_settled(settled_pos.realized_pnl_usd, settled_pos.total_cost_usd, current_window_idx)
+                        was_sd = risk.session_shutdown_active
+                        risk.record_trade_settled(settled_pos.realized_pnl_usd, settled_pos.total_cost_usd, current_window_idx, current_ts=now)
+                        dash_state.session_shutdown_active = risk.session_shutdown_active
+                        dash_state.session_shutdown_reason = risk.session_shutdown_reason
+                        if risk.session_shutdown_active and not was_sd:
+                            dash_state.add_log("SHUTDOWN", f"Session halted: {risk.session_shutdown_reason}")
 
                         if is_live:
                             # Capital Ledger Settlement Hook (Roadmap Phase 4 & 5) - LIVE BTC ONLY
@@ -1015,6 +1048,17 @@ async def run_paper(
                                 )
                             except Exception:
                                 pass
+
+                            open_exp = engine.get_open_exposure()
+                            dash_cap = capital_mgr.state.to_dict()
+                            dash_cap.update({
+                                "open_exposure": round(open_exp, 2),
+                                "spendable_active_funds": max(0.0, round(capital_mgr.state.active_capital - open_exp, 2)),
+                                "active_funds_reserved": round(open_exp, 2),
+                                "protected_funds": capital_mgr.state.protected_capital,
+                                "unsettled_funds": round(open_exp, 2),
+                            })
+                            dash_state.update_capital(dash_cap)
 
                             dash_state.add_log(
                                 "SETTLED",

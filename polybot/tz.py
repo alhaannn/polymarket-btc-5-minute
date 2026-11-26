@@ -32,6 +32,8 @@ def compute_schedule_state(
     shutdown_until_ts: Optional[float] = None,
     trades: Optional[List[Dict[str, Any]]] = None,
     ts: Optional[float] = None,
+    session_shutdown_active: bool = False,
+    session_shutdown_reason: str = "",
 ) -> Dict[str, Any]:
     """
     Computes current operating schedule status (WORKING vs RESTING),
@@ -80,7 +82,16 @@ def compute_schedule_state(
     else:
         is_shutdown = shutdown_active or (shutdown_until_ts is not None and shutdown_until_ts > now_ts)
 
-    if is_shutdown:
+    if session_shutdown_active:
+        status = "RESTING"
+        is_working = False
+        phase = "SESSION_SHUTDOWN"
+        reason = session_shutdown_reason or "Session Profit/Loss Shutdown Active (Until Next Session)"
+        until = next_start_dt.timestamp() if prime_hours_only else session_end_dt.timestamp()
+        time_left_to_start_sec = max(0.0, until - now_ts)
+        working_elapsed_sec = 0.0
+        working_remaining_sec = 0.0
+    elif is_shutdown:
         status = "RESTING"
         is_working = False
         phase = "DAILY_SHUTDOWN"
@@ -179,3 +190,13 @@ def ist_datetime_str(ts: Optional[float] = None, fmt: str = "%Y-%m-%d %H:%M:%S I
 def ist_today_str(ts: Optional[float] = None) -> str:
     """Returns the trading day string 'YYYY-MM-DD' in IST."""
     return to_ist(ts).strftime("%Y-%m-%d")
+
+
+def session_day_key(ts: Optional[float] = None, prime_hours_only: bool = True) -> str:
+    """Returns the session identifier anchored at 13:30 IST (when prime_hours_only=True) or 00:00 IST."""
+    if not prime_hours_only:
+        return ist_today_str(ts)
+    dt = to_ist(ts)
+    if dt.hour < 13 or (dt.hour == 13 and dt.minute < 30):
+        dt = dt - datetime.timedelta(days=1)
+    return dt.strftime("%Y-%m-%d_1330")

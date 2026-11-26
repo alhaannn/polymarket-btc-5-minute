@@ -46,6 +46,8 @@ class DashboardState:
         # Schedule & Working/Resting state
         self.prime_hours_only: bool = True
         self.schedule_state: Optional[Dict[str, Any]] = None
+        self.session_shutdown_active: bool = False
+        self.session_shutdown_reason: str = ""
 
         # Feed & Latency
         self.feed_status: str = "CONNECTING"  # CONNECTED, STALE, DISCONNECTED

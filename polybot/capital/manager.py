@@ -48,10 +48,15 @@ class CapitalManager:
         high_equity_reversal_multiplier: Optional[float] = None,
         high_equity_initial_ratio: Optional[float] = None,
         disable_daily_shutdown: Optional[bool] = None,
+        enable_milestone_split: Optional[bool] = None,
     ):
         self.disable_daily_shutdown = (
             disable_daily_shutdown if disable_daily_shutdown is not None
             else (os.getenv("DISABLE_DAILY_SHUTDOWN", "false").lower() in ("true", "1", "yes"))
+        )
+        self.enable_milestone_split = (
+            enable_milestone_split if enable_milestone_split is not None
+            else not (os.getenv("DISABLE_MILESTONE_SPLIT", "false").lower() in ("true", "1", "yes"))
         )
         self.sizing_mode = sizing_mode or os.getenv("SIZING_MODE", "canonical")
         self.enable_high_equity_transition = (
@@ -97,7 +102,7 @@ class CapitalManager:
         tot_before = self.state.total_equity_cents
 
         if auto_rebalance:
-            if new_total_cents >= 4400:
+            if self.enable_milestone_split and new_total_cents >= 4400:
                 # 50/50 split (odd-cent allocation policy: active gets cents // 2, protected gets remainder)
                 new_active_cents = new_total_cents // 2
                 new_prot_cents = new_total_cents - new_active_cents
@@ -437,7 +442,7 @@ class CapitalManager:
                 tx_list.append(tx_pnl)
 
                 # Check for $44 Milestone Trigger ($44.00 = 4400 cents)
-                if self.state.total_equity_cents >= 4400:
+                if self.enable_milestone_split and self.state.total_equity_cents >= 4400:
                     mid_active_before = self.state.active_capital_cents
                     mid_prot_before = self.state.protected_capital_cents
                     mid_tot_before = self.state.total_equity_cents

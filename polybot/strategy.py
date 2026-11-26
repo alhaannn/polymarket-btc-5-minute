@@ -594,8 +594,15 @@ class ReversalStrategy(BaseStrategy):
                 if prob is None or book is None:
                     continue
 
-                # Range check: 89% <= prob <= 92% (inclusive)
+                # Range check: 89% <= prob <= 90% (or configured range)
                 if self.config.initial_prob_min <= prob <= self.config.initial_prob_max:
+                    max_cp = getattr(self.config, "max_initial_counterpart_prob", None)
+                    if max_cp is not None and counterpart_prob is not None and counterpart_prob > max_cp + 1e-5:
+                        log.info(
+                            "ReversalStrategy %s ask %.3f skipped: counterpart_prob %.3f > max %.3f (wide spread)",
+                            side, prob, counterpart_prob, max_cp
+                        )
+                        continue
                     initial_stake = self.dynamic_initial_usd if self.dynamic_initial_usd is not None else self.config.initial_stake_usd
                     opp_bids = opp_b.get_sorted_bids() if opp_b else None
                     fill = book.simulate_buy(initial_stake, opposing_bids=opp_bids)

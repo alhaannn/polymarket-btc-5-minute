@@ -168,6 +168,8 @@ def create_dashboard_app(
         if auth_err:
             return auth_err
         state_dict = state.to_dict()
+        session_sd = bool(getattr(state, "session_shutdown_active", False))
+        session_sd_reason = getattr(state, "session_shutdown_reason", "")
         shutdown_active = capital_mgr.is_daily_shutdown_active() if capital_mgr else False
         shutdown_until = capital_mgr.state.shutdown_until_ts if capital_mgr else None
         recent_trades = ledger.get_recent_trades(limit=500) if ledger else None
@@ -177,6 +179,8 @@ def create_dashboard_app(
             shutdown_active=shutdown_active,
             shutdown_until_ts=shutdown_until,
             trades=recent_trades,
+            session_shutdown_active=session_sd,
+            session_shutdown_reason=session_sd_reason,
         )
         state_dict["schedule"] = sched
         state.update_schedule_state(sched)

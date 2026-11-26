@@ -34,6 +34,17 @@ def _get_env_val(key: str, default: Any, val_type: type) -> Any:
         return default
 
 
+def _get_opt_float(key: str) -> Optional[float]:
+    """Read an optional float environment variable, returning None if unset or blank."""
+    val = os.getenv(key)
+    if val is None or not val.strip():
+        return None
+    try:
+        return float(val.strip())
+    except (ValueError, TypeError):
+        return None
+
+
 @dataclass
 class FeedsConfig:
     rtds_ws_url: str = "wss://ws-live-data.polymarket.com"
@@ -119,6 +130,7 @@ class StrategyConfig:
     reversal_stake_usd: float = 10.0
     initial_prob_min: float = 0.89
     initial_prob_max: float = 0.91
+    max_initial_counterpart_prob: Optional[float] = None
     reversal_prob_min: float = 0.85
     reversal_prob_max: float = 0.90
     max_reversal_stages: int = 2
@@ -185,6 +197,7 @@ class StrategyConfig:
             reversal_stake_usd=_get_env_val("REVERSAL_STAKE_USD", 10.0, float),
             initial_prob_min=_get_env_val("INITIAL_PROB_MIN", 0.89, float),
             initial_prob_max=_get_env_val("INITIAL_PROB_MAX", 0.91, float),
+            max_initial_counterpart_prob=_get_opt_float("MAX_INITIAL_COUNTERPART_PROB"),
             reversal_prob_min=_get_env_val("REVERSAL_PROB_MIN", 0.65 if os.getenv("RECOVERY_FLIP_MODE", "fixed") == "precision" else 0.85, float),
             reversal_prob_max=_get_env_val("REVERSAL_PROB_MAX", 0.85 if os.getenv("RECOVERY_FLIP_MODE", "fixed") == "precision" else 0.95, float),
             max_reversal_stages=_get_env_val("MAX_REVERSAL_STAGES", 2, int),
@@ -233,6 +246,12 @@ class RiskConfig:
     kelly_fraction: float = 0.25
     kelly_max_stake_usd: float = 15.0
     disable_daily_shutdown: bool = False
+    session_aligned_reset: bool = False
+    prime_hours_only: bool = False
+    session_max_loss_usd: Optional[float] = None
+    session_profit_target_usd: Optional[float] = None
+    trailing_arm_usd: Optional[float] = None
+    trailing_drop_usd: Optional[float] = None
 
     @classmethod
     def from_env(cls) -> RiskConfig:
@@ -249,6 +268,12 @@ class RiskConfig:
             kelly_fraction=_get_env_val("KELLY_FRACTION", 0.25, float),
             kelly_max_stake_usd=_get_env_val("KELLY_MAX_STAKE_USD", 15.0, float),
             disable_daily_shutdown=_get_env_val("DISABLE_DAILY_SHUTDOWN", False, bool),
+            session_aligned_reset=_get_env_val("SESSION_ALIGNED_RESET", False, bool),
+            prime_hours_only=_get_env_val("PRIME_HOURS_ONLY", False, bool),
+            session_max_loss_usd=_get_opt_float("SESSION_MAX_LOSS_USD"),
+            session_profit_target_usd=_get_opt_float("SESSION_PROFIT_TARGET_USD"),
+            trailing_arm_usd=_get_opt_float("TRAILING_ARM_USD"),
+            trailing_drop_usd=_get_opt_float("TRAILING_DROP_USD"),
         )
 
 
